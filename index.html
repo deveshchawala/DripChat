@@ -1,0 +1,298 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+    <title>DripChat - AI Wardrobe Assistant</title>
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- Telegram WebApp SDK -->
+    <script src="https://telegram.org/js/telegram-web-app.js"></script>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div id="app-container">
+        <!-- TOP NAVIGATION / HEADER -->
+        <header id="app-header">
+            <div class="header-logo">
+                <span class="logo-icon">✨</span>
+                <h1>DripChat</h1>
+            </div>
+            <div id="connection-indicator" class="status-dot disconnected" title="Gemini API Key Required"></div>
+        </header>
+
+        <!-- MAIN VIEWS CONTAINER -->
+        <main id="app-main">
+            <!-- 1. WARDROBE VIEW -->
+            <section id="view-wardrobe" class="app-view active">
+                <div class="view-header">
+                    <h2>My Wardrobe</h2>
+                    <p class="view-subtitle">Your collection of outfits</p>
+                </div>
+                
+                <!-- Filters Bar -->
+                <div class="filter-bar">
+                    <button class="filter-chip active" data-category="all">All</button>
+                    <button class="filter-chip" data-category="tops">Tops</button>
+                    <button class="filter-chip" data-category="bottoms">Bottoms</button>
+                    <button class="filter-chip" data-category="outerwear">Outerwear</button>
+                    <button class="filter-chip" data-category="shoes">Shoes</button>
+                    <button class="filter-chip" data-category="accessories">Accs</button>
+                </div>
+
+                <!-- Wardrobe Items Grid -->
+                <div id="wardrobe-grid" class="items-grid">
+                    <!-- Empty State (Shown when no items) -->
+                    <div class="empty-state" id="wardrobe-empty">
+                        <div class="empty-icon">👕</div>
+                        <h3>Your wardrobe is empty</h3>
+                        <p>Upload photos of your clothes to get AI outfit suggestions!</p>
+                        <button class="btn btn-primary btn-tab-trigger" data-target="view-add">Add Your First Item</button>
+                    </div>
+                </div>
+            </section>
+
+            <!-- 2. AI CHAT ASSISTANT VIEW -->
+            <section id="view-chat" class="app-view">
+                <div class="view-header">
+                    <h2>AI Assistant</h2>
+                    <p class="view-subtitle">Ask what to wear today</p>
+                </div>
+
+                <!-- Chat Messages Feed -->
+                <div id="chat-messages" class="messages-container">
+                    <div class="message assistant">
+                        <div class="message-bubble">
+                            Hey there! 👋 I am <strong>DripChat</strong>, your personal wardrobe assistant. 
+                            <br><br>
+                            Make sure you've added your <strong>Gemini API Key</strong> in settings, and added a few items to your <strong>Wardrobe</strong>. 
+                            <br><br>
+                            Tell me what the weather is like, where you're going, or what style you want, and I'll suggest the perfect outfit!
+                        </div>
+                        <span class="message-time">Just now</span>
+                    </div>
+                </div>
+
+                <!-- Chat Input Dock -->
+                <div class="chat-input-bar">
+                    <textarea id="chat-input" placeholder="e.g. Cozy outfit for a rainy 15°C afternoon coffee date..." rows="1"></textarea>
+                    <button id="btn-send-chat" class="btn btn-icon btn-primary" aria-label="Send message">
+                        <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                            <line x1="22" y1="2" x2="11" y2="13"></line>
+                            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+                        </svg>
+                    </button>
+                </div>
+            </section>
+
+            <!-- 3. ADD ITEM VIEW -->
+            <section id="view-add" class="app-view">
+                <div class="view-header">
+                    <h2>Add to Wardrobe</h2>
+                    <p class="view-subtitle">Snap or upload a photo of your clothes</p>
+                </div>
+
+                <div class="add-container">
+                    <!-- Image Selection / Dnd Area -->
+                    <div id="upload-box" class="upload-zone">
+                        <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+                        <div class="upload-content">
+                            <div class="upload-icon">📸</div>
+                            <p class="upload-title">Take Photo or Browse</p>
+                            <p class="upload-hint">Upload a photo and fill in the details manually</p>
+                        </div>
+                        <div id="upload-preview-container" class="hidden">
+                            <img id="upload-preview" src="" alt="Clothing preview">
+                            <div id="scanner-line" class="scanning"></div>
+                            <button id="btn-clear-upload" class="btn-clear">&times;</button>
+                        </div>
+                    </div>
+
+                    <!-- AI Auto-Tagging Status -->
+                    <div id="tagging-status" class="status-card hidden">
+                        <div class="spinner"></div>
+                        <p>Processing your photo...</p>
+                    </div>
+
+                    <!-- Clothing Attributes Form -->
+                    <form id="clothing-form" class="clothing-form hidden">
+                        <div id="detected-items-container">
+                            <!-- Dynamic detected item cards will render here -->
+                        </div>
+                        <button type="submit" id="btn-save-items" class="btn btn-primary btn-block">Add to Wardrobe</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- 4. GAP ANALYSIS / SHOPPING VIEW -->
+            <section id="view-shop" class="app-view">
+                <div class="view-header">
+                    <h2>Wardrobe Analysis</h2>
+                    <p class="view-subtitle">Discover missing pieces to unlock new outfits</p>
+                </div>
+
+                <div class="shop-container">
+                    <div class="analysis-card">
+                        <div class="card-pulse-icon">🛍️</div>
+                        <h3>Smart Wardrobe Analytics</h3>
+                        <p>Let Gemini analyze your current collection gaps and suggest the most impactful items to buy next.</p>
+                        
+                        <button id="btn-run-analysis" class="btn btn-primary btn-block">
+                            <span>Analyze Wardrobe Gaps</span>
+                        </button>
+                    </div>
+
+                    <div id="analysis-results" class="analysis-results-container hidden">
+                        <!-- Loaded via JS -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- 5. SETTINGS VIEW -->
+            <section id="view-settings" class="app-view">
+                <div class="view-header">
+                    <h2>Settings</h2>
+                    <p class="view-subtitle">Customize and manage your assistant</p>
+                </div>
+
+                <div class="settings-container">
+                    <!-- API Settings -->
+                    <div class="settings-card">
+                        <h3>🔑 Gemini API Configuration</h3>
+                        <p class="card-hint">Your API Key is saved directly in your device storage and never sent elsewhere.</p>
+                        
+                        <div class="form-group">
+                            <label for="api-key-input">Gemini API Key</label>
+                            <div class="password-input-wrapper">
+                                <input type="password" id="api-key-input" placeholder="Enter AI Studio API Key...">
+                                <button type="button" id="btn-toggle-key" class="btn-toggle-view">👁️</button>
+                            </div>
+                            <span class="input-helper-text">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</span>
+                        </div>
+                        
+                        <button id="btn-save-settings" class="btn btn-primary btn-block">Save API Key</button>
+
+                        <div class="caveman-toggle">
+                            <label class="switch">
+                                <input type="checkbox" id="caveman-checkbox">
+                                <span class="slider"></span>
+                            </label>
+                            <span>Caveman Mode</span>
+                        </div>
+                    </div>
+
+                    <!-- Wardrobe Backup -->
+                    <div class="settings-card">
+                        <h3>💾 Backup & Portability</h3>
+                        <p class="card-hint">Export your complete wardrobe (including photos) to move to another device.</p>
+                        
+                        <div class="settings-actions-grid">
+                            <button id="btn-export-wardrobe" class="btn btn-secondary">
+                                📤 Export Backup
+                            </button>
+                            <button id="btn-import-trigger" class="btn btn-secondary">
+                                📥 Import Backup
+                            </button>
+                            <input type="file" id="import-file-input" accept=".json" hidden>
+                        </div>
+                    </div>
+
+                    <!-- Storage & Database Reset -->
+                    <div class="settings-card">
+                        <h3>⚠️ System Management</h3>
+                        <div class="storage-stats">
+                            <div class="stat-row">
+                                <span>Wardrobe Size:</span>
+                                <strong id="stat-item-count">0 items</strong>
+                            </div>
+                            <div class="stat-row">
+                                <span>Storage Used:</span>
+                                <strong id="stat-storage-size">0.0 MB</strong>
+                            </div>
+                        </div>
+                        <button id="btn-reset-db" class="btn btn-danger btn-block">🗑️ Reset Database</button>
+                    </div>
+                </div>
+            </section>
+        </main>
+
+        <!-- BOTTOM TAB NAVIGATION BAR -->
+        <nav id="app-nav">
+            <button class="nav-tab active" data-target="view-wardrobe">
+                <div class="tab-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
+                        <line x1="7" y1="7" x2="7.01" y2="7"></line>
+                    </svg>
+                </div>
+                <span class="tab-label">Wardrobe</span>
+            </button>
+            <button class="nav-tab" data-target="view-chat">
+                <div class="tab-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
+                    </svg>
+                </div>
+                <span class="tab-label">Assistant</span>
+            </button>
+            <button class="nav-tab highlight" data-target="view-add">
+                <div class="tab-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="12" y1="5" x2="12" y2="19"></line>
+                        <line x1="5" y1="12" x2="19" y2="12"></line>
+                    </svg>
+                </div>
+                <span class="tab-label">Add</span>
+            </button>
+            <button class="nav-tab" data-target="view-shop">
+                <div class="tab-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <line x1="18" y1="20" x2="18" y2="10"></line>
+                        <line x1="12" y1="20" x2="12" y2="4"></line>
+                        <line x1="6" y1="20" x2="6" y2="14"></line>
+                        <line x1="2" y1="20" x2="22" y2="20"></line>
+                    </svg>
+                </div>
+                <span class="tab-label">Analysis</span>
+            </button>
+            <button class="nav-tab" data-target="view-settings">
+                <div class="tab-icon">
+                    <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                        <circle cx="12" cy="12" r="3"></circle>
+                        <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
+                    </svg>
+                </div>
+                <span class="tab-label">Settings</span>
+            </button>
+        </nav>
+    </div>
+
+    <!-- UI Modal for viewing clothing item details -->
+    <div id="item-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <button id="btn-close-modal" class="modal-close-btn">&times;</button>
+            <div class="modal-hero">
+                <img id="modal-item-img" src="" alt="Clothing item image">
+                <div class="modal-category-badge" id="modal-item-category">Tops</div>
+            </div>
+            <div class="modal-body">
+                <h3 id="modal-item-name">Black Leather Jacket</h3>
+                <div class="modal-tags">
+                    <span class="modal-tag" id="modal-item-style">⚡ Casual</span>
+                    <span class="modal-tag" id="modal-item-season">🌧️ Rainy</span>
+                    <span class="modal-tag" id="modal-item-color"><span class="color-dot"></span> Navy</span>
+                </div>
+                <div class="modal-section">
+                    <h4>Notes</h4>
+                    <p id="modal-item-notes">No notes available.</p>
+                </div>
+                <button id="btn-delete-item" class="btn btn-danger btn-block">Delete Item</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
