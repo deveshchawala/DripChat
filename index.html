@@ -97,7 +97,7 @@
                 <div class="add-container">
                     <!-- Image Selection / Dnd Area -->
                     <div id="upload-box" class="upload-zone">
-                        <input type="file" id="file-input" accept="image/*" capture="environment" hidden>
+                        <input type="file" id="file-input" accept="image/*" hidden>
                         <div class="upload-content">
                             <div class="upload-icon">📸</div>
                             <p class="upload-title">Take Photo or Browse</p>
@@ -267,6 +267,32 @@
                 <span class="tab-label">Settings</span>
             </button>
         </nav>
+    </div>
+
+    <!-- Crop Modal -->
+    <div id="crop-modal" class="modal-overlay hidden">
+        <div class="crop-modal-content">
+            <div class="crop-modal-header">
+                <span class="crop-modal-title">Crop Item</span>
+                <button type="button" id="btn-crop-cancel" class="btn btn-secondary btn-sm">Cancel</button>
+            </div>
+            <div class="crop-body">
+                <div class="crop-wrapper" id="crop-wrapper">
+                    <img id="crop-image" src="" alt="Crop">
+                    <div class="crop-overlay" id="crop-overlay">
+                        <div class="crop-box" id="crop-box">
+                            <div class="crop-handle crop-handle-nw" data-dir="nw"></div>
+                            <div class="crop-handle crop-handle-ne" data-dir="ne"></div>
+                            <div class="crop-handle crop-handle-sw" data-dir="sw"></div>
+                            <div class="crop-handle crop-handle-se" data-dir="se"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="crop-modal-footer">
+                <button id="btn-crop-confirm" class="btn btn-primary">Crop & Continue</button>
+            </div>
+        </div>
     </div>
 
     <!-- UI Modal for viewing clothing item details -->

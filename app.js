@@ -161,6 +161,183 @@ Inventory:\n${list || 'EMPTY'}`;
     }
 };
 
+const CropTool = {
+    img: null, wrapper: null, box: null, overlay: null,
+    imgW: 0, imgH: 0, viewW: 0, viewH: 0, offsetX: 0, offsetY: 0,
+    dragging: false, mode: 'move', startX: 0, startY: 0,
+    boxStart: {},
+    resolve: null,
+
+    open(base64) {
+        return new Promise((resolve) => {
+            this.resolve = resolve;
+            document.getElementById('crop-modal').classList.remove('hidden');
+            const img = document.getElementById('crop-image');
+            img.src = base64;
+            img.onload = () => {
+                this.img = img;
+                this.wrapper = document.getElementById('crop-wrapper');
+                this.box = document.getElementById('crop-box');
+                this.overlay = document.getElementById('crop-overlay');
+                this.calcDimensions();
+                this.initBox();
+                this.bindEvents();
+            };
+        });
+    },
+
+    close() {
+        document.getElementById('crop-modal').classList.add('hidden');
+        this.unbindEvents();
+    },
+
+    calcDimensions() {
+        const wr = this.wrapper.getBoundingClientRect();
+        const ir = this.img.getBoundingClientRect();
+        const s = Math.min(wr.width / this.img.naturalWidth, wr.height / this.img.naturalHeight, 1);
+        this.viewW = this.img.naturalWidth * s;
+        this.viewH = this.img.naturalHeight * s;
+        this.offsetX = ir.left - wr.left;
+        this.offsetY = ir.top - wr.top;
+        this.imgW = this.img.naturalWidth;
+        this.imgH = this.img.naturalHeight;
+    },
+
+    initBox() {
+        const pad = 0.1;
+        const l = this.offsetX + this.viewW * pad;
+        const t = this.offsetY + this.viewH * pad;
+        const w = this.viewW * (1 - 2 * pad);
+        const h = this.viewH * (1 - 2 * pad);
+        this.box.style.left = l + 'px';
+        this.box.style.top = t + 'px';
+        this.box.style.width = w + 'px';
+        this.box.style.height = h + 'px';
+    },
+
+    bindEvents() {
+        this.onPointerDown = this.handlePointerDown.bind(this);
+        this.onPointerMove = this.handlePointerMove.bind(this);
+        this.onPointerUp = this.handlePointerUp.bind(this);
+        this.box.addEventListener('mousedown', this.onPointerDown);
+        this.box.addEventListener('touchstart', this.onPointerDown, { passive: false });
+        document.addEventListener('mousemove', this.onPointerMove);
+        document.addEventListener('mouseup', this.onPointerUp);
+        document.addEventListener('touchmove', this.onPointerMove, { passive: false });
+        document.addEventListener('touchend', this.onPointerUp);
+        document.getElementById('btn-crop-confirm').addEventListener('click', () => this.confirm());
+        document.getElementById('btn-crop-cancel').addEventListener('click', () => this.cancel());
+    },
+
+    unbindEvents() {
+        this.box?.removeEventListener('mousedown', this.onPointerDown);
+        this.box?.removeEventListener('touchstart', this.onPointerDown);
+        document.removeEventListener('mousemove', this.onPointerMove);
+        document.removeEventListener('mouseup', this.onPointerUp);
+        document.removeEventListener('touchmove', this.onPointerMove);
+        document.removeEventListener('touchend', this.onPointerUp);
+    },
+
+    getPos(e) {
+        const p = e.touches ? e.touches[0] : e;
+        return { x: p.clientX, y: p.clientY };
+    },
+
+    handlePointerDown(e) {
+        e.preventDefault();
+        const t = e.target;
+        if (t.classList.contains('crop-handle') || t.closest('.crop-handle')) {
+            const handle = t.closest('.crop-handle');
+            this.mode = 'resize-' + handle.getAttribute('data-dir');
+        } else {
+            this.mode = 'move';
+        }
+        const pos = this.getPos(e);
+        this.startX = pos.x;
+        this.startY = pos.y;
+        this.dragging = true;
+        this.boxStart = {
+            left: parseFloat(this.box.style.left),
+            top: parseFloat(this.box.style.top),
+            width: parseFloat(this.box.style.width),
+            height: parseFloat(this.box.style.height)
+        };
+    },
+
+    handlePointerMove(e) {
+        if (!this.dragging) return;
+        e.preventDefault();
+        const pos = this.getPos(e);
+        const dx = pos.x - this.startX;
+        const dy = pos.y - this.startY;
+        const min = 40;
+        let l = this.boxStart.left, t = this.boxStart.top;
+        let w = this.boxStart.width, h = this.boxStart.height;
+
+        if (this.mode === 'move') {
+            l += dx; t += dy;
+        } else if (this.mode === 'resize-se') {
+            w = Math.max(min, this.boxStart.width + dx);
+            h = Math.max(min, this.boxStart.height + dy);
+        } else if (this.mode === 'resize-sw') {
+            w = Math.max(min, this.boxStart.width - dx);
+            h = Math.max(min, this.boxStart.height + dy);
+            l += this.boxStart.width - w;
+        } else if (this.mode === 'resize-ne') {
+            w = Math.max(min, this.boxStart.width + dx);
+            h = Math.max(min, this.boxStart.height - dy);
+            t += this.boxStart.height - h;
+        } else if (this.mode === 'resize-nw') {
+            w = Math.max(min, this.boxStart.width - dx);
+            h = Math.max(min, this.boxStart.height - dy);
+            l += this.boxStart.width - w;
+            t += this.boxStart.height - h;
+        }
+
+        const maxL = this.offsetX + this.viewW - 10;
+        const maxT = this.offsetY + this.viewH - 10;
+        const minL = this.offsetX;
+        const minT = this.offsetY;
+        l = Math.max(minL, Math.min(maxL - w, l));
+        t = Math.max(minT, Math.min(maxT - h, t));
+        w = Math.max(min, Math.min(this.offsetX + this.viewW - l, w));
+        h = Math.max(min, Math.min(this.offsetY + this.viewH - t, h));
+
+        this.box.style.left = l + 'px';
+        this.box.style.top = t + 'px';
+        this.box.style.width = w + 'px';
+        this.box.style.height = h + 'px';
+    },
+
+    handlePointerUp() {
+        this.dragging = false;
+    },
+
+    getRect() {
+        const l = parseFloat(this.box.style.left);
+        const t = parseFloat(this.box.style.top);
+        const w = parseFloat(this.box.style.width);
+        const h = parseFloat(this.box.style.height);
+        return {
+            x: (l - this.offsetX) / this.viewW,
+            y: (t - this.offsetY) / this.viewH,
+            w: w / this.viewW,
+            h: h / this.viewH
+        };
+    },
+
+    confirm() {
+        const rect = this.getRect();
+        this.close();
+        this.resolve(rect);
+    },
+
+    cancel() {
+        this.close();
+        this.resolve(null);
+    }
+};
+
 const UI = {
     init() {
         this.setupNavigation();
@@ -258,8 +435,11 @@ const UI = {
             const file = e.target.files[0];
             if (!file) return;
             this.setUploadState('loading');
-            State.tempUploadBase64 = await compressImage(file);
+            const compressed = await compressImage(file);
             State.tempUploadMime = file.type;
+            const cropRect = await CropTool.open(compressed);
+            if (!cropRect) { this.resetUploadForm(); return; }
+            State.tempUploadBase64 = await cropImage(compressed, cropRect);
             document.getElementById('upload-preview').src = State.tempUploadBase64;
             document.getElementById('upload-preview-container').classList.remove('hidden');
             this.renderDetectedItems([FALLBACK_ITEM]);
@@ -275,10 +455,8 @@ const UI = {
             if (cards.length === 0) { alert("No items in the list to save."); return; }
             try {
                 for (const card of cards) {
-                    const bboxRaw = card.querySelector('.detect-item-bbox').value;
-                    const bbox = bboxRaw ? JSON.parse(bboxRaw) : null;
                     const item = {
-                        image: await cropImage(State.tempUploadBase64, bbox),
+                        image: State.tempUploadBase64,
                         name: card.querySelector('.detect-item-name').value,
                         category: card.querySelector('.detect-item-category').value,
                         colorHex: card.querySelector('.detect-item-color').value,
@@ -364,8 +542,7 @@ const UI = {
                 <div class="form-group">
                     <label>Notes (Optional)</label>
                     <input type="text" class="detect-item-notes" value="${item.notes || ''}" placeholder="e.g. Slim fit cotton">
-                </div>
-                <input type="hidden" class="detect-item-bbox" value='${JSON.stringify(item.bbox) || ''}'>`;
+                </div>`;
             card.querySelector('.btn-remove-detected').addEventListener('click', () => {
                 card.remove();
                 const remaining = container.querySelectorAll('.detected-item-card');
