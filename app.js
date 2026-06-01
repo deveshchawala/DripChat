@@ -173,7 +173,6 @@ const CropTool = {
             this.resolve = resolve;
             document.getElementById('crop-modal').classList.remove('hidden');
             const img = document.getElementById('crop-image');
-            img.src = base64;
             img.onload = () => {
                 this.img = img;
                 this.wrapper = document.getElementById('crop-wrapper');
@@ -183,6 +182,7 @@ const CropTool = {
                 this.initBox();
                 this.bindEvents();
             };
+            img.src = base64;
         });
     },
 
@@ -219,14 +219,16 @@ const CropTool = {
         this.onPointerDown = this.handlePointerDown.bind(this);
         this.onPointerMove = this.handlePointerMove.bind(this);
         this.onPointerUp = this.handlePointerUp.bind(this);
+        this.onConfirm = () => this.confirm();
+        this.onCancel = () => this.cancel();
         this.box.addEventListener('mousedown', this.onPointerDown);
         this.box.addEventListener('touchstart', this.onPointerDown, { passive: false });
         document.addEventListener('mousemove', this.onPointerMove);
         document.addEventListener('mouseup', this.onPointerUp);
         document.addEventListener('touchmove', this.onPointerMove, { passive: false });
         document.addEventListener('touchend', this.onPointerUp);
-        document.getElementById('btn-crop-confirm').addEventListener('click', () => this.confirm());
-        document.getElementById('btn-crop-cancel').addEventListener('click', () => this.cancel());
+        document.getElementById('btn-crop-confirm').addEventListener('click', this.onConfirm);
+        document.getElementById('btn-crop-cancel').addEventListener('click', this.onCancel);
     },
 
     unbindEvents() {
@@ -236,6 +238,8 @@ const CropTool = {
         document.removeEventListener('mouseup', this.onPointerUp);
         document.removeEventListener('touchmove', this.onPointerMove);
         document.removeEventListener('touchend', this.onPointerUp);
+        document.getElementById('btn-crop-confirm')?.removeEventListener('click', this.onConfirm);
+        document.getElementById('btn-crop-cancel')?.removeEventListener('click', this.onCancel);
     },
 
     getPos(e) {
@@ -422,19 +426,16 @@ const UI = {
     },
 
     setupUploader() {
-        const box = document.getElementById('upload-box');
-        const input = document.getElementById('file-input');
+        const cameraInput = document.getElementById('camera-input');
+        const galleryInput = document.getElementById('gallery-input');
         const clearBtn = document.getElementById('btn-clear-upload');
         const form = document.getElementById('clothing-form');
 
-        box.addEventListener('click', (e) => {
-            if (e.target !== clearBtn && !clearBtn.contains(e.target)) input.click();
-        });
+        document.getElementById('btn-take-photo').addEventListener('click', () => cameraInput.click());
+        document.getElementById('btn-browse-gallery').addEventListener('click', () => galleryInput.click());
 
-        input.addEventListener('change', async (e) => {
-            const file = e.target.files[0];
+        const handleFile = async (file) => {
             if (!file) return;
-            this.setUploadState('loading');
             const compressed = await compressImage(file);
             State.tempUploadMime = file.type;
             const cropRect = await CropTool.open(compressed);
@@ -442,9 +443,18 @@ const UI = {
             State.tempUploadBase64 = await cropImage(compressed, cropRect);
             document.getElementById('upload-preview').src = State.tempUploadBase64;
             document.getElementById('upload-preview-container').classList.remove('hidden');
-            this.renderDetectedItems([FALLBACK_ITEM]);
+            this.setUploadState('loading');
+            try {
+                const items = await Gemini.autoTagClothingItem(State.tempUploadBase64, State.tempUploadMime);
+                this.renderDetectedItems(items);
+            } catch {
+                this.renderDetectedItems([FALLBACK_ITEM]);
+            }
             this.setUploadState('ready');
-        });
+        };
+
+        cameraInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
+        galleryInput.addEventListener('change', (e) => handleFile(e.target.files[0]));
 
         clearBtn.addEventListener('click', (e) => { e.stopPropagation(); this.resetUploadForm(); });
 
@@ -488,7 +498,8 @@ const UI = {
     },
 
     resetUploadForm() {
-        document.getElementById('file-input').value = '';
+        document.getElementById('camera-input').value = '';
+        document.getElementById('gallery-input').value = '';
         document.getElementById('upload-preview').src = '';
         document.getElementById('upload-preview-container').classList.add('hidden');
         document.querySelector('.upload-content').classList.remove('hidden');

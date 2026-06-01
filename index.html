@@ -97,11 +97,16 @@
                 <div class="add-container">
                     <!-- Image Selection / Dnd Area -->
                     <div id="upload-box" class="upload-zone">
-                        <input type="file" id="file-input" accept="image/*" hidden>
+                        <input type="file" id="camera-input" accept="image/*" capture="environment" hidden>
+                        <input type="file" id="gallery-input" accept="image/*" hidden>
                         <div class="upload-content">
                             <div class="upload-icon">📸</div>
-                            <p class="upload-title">Take Photo or Browse</p>
-                            <p class="upload-hint">Upload a photo and fill in the details manually</p>
+                            <p class="upload-title">Add a Clothing Photo</p>
+                            <p class="upload-hint">Take a photo or pick from your gallery</p>
+                            <div class="upload-btn-row">
+                                <button type="button" id="btn-take-photo" class="btn btn-primary btn-upload">📸 Camera</button>
+                                <button type="button" id="btn-browse-gallery" class="btn btn-secondary btn-upload">🖼️ Gallery</button>
+                            </div>
                         </div>
                         <div id="upload-preview-container" class="hidden">
                             <img id="upload-preview" src="" alt="Clothing preview">
