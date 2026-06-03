@@ -1,6 +1,6 @@
 const State = {
-    apiKey: '', currentView: 'view-wardrobe', wardrobe: [],
-    tgWebApp: null, tempUploadBase64: null, tempUploadMime: null, cavemanMode: false
+    apiKey: '', wardrobe: [],
+    tempUploadBase64: null, tempUploadMime: null, cavemanMode: false
 };
 
 const idb = (method, arg) => new Promise((res, rej) => {
@@ -29,25 +29,28 @@ const DB = {
     clearAll: () => idb('clear')
 };
 
-function compressImage(file, maxDimension = 800) {
+function compressImage(src) {
+    const maxDimension = 800;
     return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.readAsDataURL(file);
-        reader.onload = (e) => {
-            const img = new Image();
-            img.src = e.target.result;
-            img.onload = () => {
-                const canvas = document.createElement('canvas');
-                let w = img.width, h = img.height;
-                if (w > h) { if (w > maxDimension) { h = Math.round(h * maxDimension / w); w = maxDimension; } }
-                else { if (h > maxDimension) { w = Math.round(w * maxDimension / h); h = maxDimension; } }
-                canvas.width = w; canvas.height = h;
-                canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                resolve(canvas.toDataURL('image/jpeg', 0.75));
-            };
-            img.onerror = () => reject("Invalid image file.");
+        const img = new Image();
+        img.onload = () => {
+            const canvas = document.createElement('canvas');
+            let w = img.width, h = img.height;
+            if (w > h) { if (w > maxDimension) { h = Math.round(h * maxDimension / w); w = maxDimension; } }
+            else { if (h > maxDimension) { w = Math.round(w * maxDimension / h); h = maxDimension; } }
+            canvas.width = w; canvas.height = h;
+            canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+            resolve(canvas.toDataURL('image/jpeg', 0.75));
         };
-        reader.onerror = () => reject("File reading failed.");
+        img.onerror = () => reject("Invalid image file.");
+        if (src instanceof File) {
+            const r = new FileReader();
+            r.onload = () => { img.src = r.result; };
+            r.onerror = () => reject("File reading failed.");
+            r.readAsDataURL(src);
+        } else {
+            img.src = src;
+        }
     });
 }
 
@@ -79,15 +82,27 @@ function cropImage(base64Image, bbox) {
     });
 }
 
+function showToast(message, type, duration = 3000) {
+    const container = document.getElementById('toast-container');
+    const el = document.createElement('div');
+    el.className = `toast${type ? ' ' + type : ''}`;
+    el.textContent = message;
+    container.appendChild(el);
+    setTimeout(() => {
+        el.classList.add('out');
+        setTimeout(() => el.remove(), 250);
+    }, duration);
+}
+
 const TelegramIntegration = {
     init() {
         if (window.Telegram?.WebApp) {
-            State.tgWebApp = window.Telegram.WebApp;
-            State.tgWebApp.ready();
-            State.tgWebApp.expand();
+            const tg = window.Telegram.WebApp;
+            tg.ready();
+            tg.expand();
             document.body.classList.add('in-telegram');
-            if (State.tgWebApp.themeParams?.bg_color)
-                document.documentElement.style.setProperty('--bg-color', State.tgWebApp.themeParams.bg_color);
+            if (tg.themeParams?.bg_color)
+                document.documentElement.style.setProperty('--bg-color', tg.themeParams.bg_color);
         }
     }
 };
@@ -132,8 +147,7 @@ const Gemini = {
             jsonMode: true,
             contents: [{ parts: [
                 { text: `Analyze clothing photo. Return JSON array of distinct items found.
-Each object: {"name":"short name","category":"tops|bottoms|outerwear|shoes|accessories","colorName":"primary+accent colors","colorHex":"#hex","style":"casual|formal|athletic|smart-casual|streetwear","season":"all|hot|cold|mild|rainy","notes":"color layout, textures, fit description for stylist","bbox":{"x":0.1,"y":0.05,"w":0.35,"h":0.6}}
-bbox = decimal fraction of image (0-1), x,y=top-left corner, w,h=width&height. Tight crop with minimal padding. Include bbox for every item.` },
+Each object: {"name":"short name","category":"tops|bottoms|outerwear|shoes|accessories","colorName":"primary+accent colors","colorHex":"#hex","style":"casual|formal|athletic|smart-casual|streetwear","season":"all|hot|cold|mild|rainy","notes":"color layout, textures, fit description for stylist"}` },
                 { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Image.split(',')[1] } }
             ]}]
         };
@@ -162,8 +176,8 @@ Inventory:\n${list || 'EMPTY'}`;
 };
 
 const CropTool = {
-    img: null, wrapper: null, box: null, overlay: null,
-    imgW: 0, imgH: 0, viewW: 0, viewH: 0, offsetX: 0, offsetY: 0,
+    img: null, wrapper: null, box: null,
+    viewW: 0, viewH: 0, offsetX: 0, offsetY: 0,
     dragging: false, mode: 'move', startX: 0, startY: 0,
     boxStart: {},
     resolve: null,
@@ -177,7 +191,6 @@ const CropTool = {
                 this.img = img;
                 this.wrapper = document.getElementById('crop-wrapper');
                 this.box = document.getElementById('crop-box');
-                this.overlay = document.getElementById('crop-overlay');
                 this.calcDimensions();
                 this.initBox();
                 this.bindEvents();
@@ -199,8 +212,6 @@ const CropTool = {
         this.viewH = this.img.naturalHeight * s;
         this.offsetX = ir.left - wr.left;
         this.offsetY = ir.top - wr.top;
-        this.imgW = this.img.naturalWidth;
-        this.imgH = this.img.naturalHeight;
     },
 
     initBox() {
@@ -351,11 +362,12 @@ const UI = {
         this.setupWardrobeViews();
         this.setupGapAnalysis();
         this.updateConnectionStatus();
+        this.setupRipple();
     },
 
     setupNavigation() {
         document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', () => this.switchView(t.getAttribute('data-target'))));
-        document.querySelector('.btn-tab-trigger')?.addEventListener('click', (e) => this.switchView(e.target.getAttribute('data-target')));
+        document.querySelector('.btn-tab-trigger')?.addEventListener('click', (e) => this.switchView(e.currentTarget.getAttribute('data-target')));
     },
 
     switchView(viewId) {
@@ -364,18 +376,17 @@ const UI = {
         document.querySelectorAll('.nav-tab').forEach(t => {
             t.classList.toggle('active', t.getAttribute('data-target') === viewId);
         });
-        State.currentView = viewId;
         if (viewId === 'view-wardrobe') this.renderWardrobe();
         else if (viewId === 'view-settings') this.renderStorageStats();
     },
 
     setupWardrobeViews() {
-        document.querySelectorAll('.filter-chip').forEach(chip => {
-            chip.addEventListener('click', () => {
-                document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
-                chip.classList.add('active');
-                this.renderWardrobe(chip.getAttribute('data-category'));
-            });
+        document.querySelector('.filter-bar').addEventListener('click', (e) => {
+            const chip = e.target.closest('.filter-chip');
+            if (!chip) return;
+            document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
+            chip.classList.add('active');
+            this.renderWardrobe(chip.getAttribute('data-category'));
         });
         document.getElementById('btn-close-modal').addEventListener('click', () => {
             document.getElementById('item-modal').classList.add('hidden');
@@ -385,8 +396,8 @@ const UI = {
     renderWardrobe(filter = 'all') {
         const grid = document.getElementById('wardrobe-grid');
         const empty = document.getElementById('wardrobe-empty');
-        grid.querySelectorAll('.item-card').forEach(el => el.remove());
         const items = filter === 'all' ? State.wardrobe : State.wardrobe.filter(i => i.category === filter);
+        grid.querySelectorAll('.item-card').forEach(el => el.remove());
         if (items.length === 0) {
             empty.classList.remove('hidden');
             empty.querySelector('h3').innerText = filter === 'all' ? 'Your wardrobe is empty' : 'No items in this category';
@@ -394,13 +405,16 @@ const UI = {
             return;
         }
         empty.classList.add('hidden');
-        items.forEach(item => {
+        const frag = document.createDocumentFragment();
+        items.forEach((item, i) => {
             const card = document.createElement('div');
             card.className = 'item-card';
+            card.style.setProperty('--i', i);
             card.innerHTML = `<div class="card-img-wrapper"><img src="${item.image}" alt="${item.name}" loading="lazy"><span class="card-badge">${item.category}</span></div><div class="card-info"><h4>${item.name}</h4><div class="card-meta"><span>${item.style}</span><div class="card-color-indicator" style="background:${item.colorHex}" title="${item.colorName}"></div></div></div>`;
             card.addEventListener('click', () => this.showItemDetails(item));
-            grid.appendChild(card);
+            frag.appendChild(card);
         });
+        grid.appendChild(frag);
     },
 
     showItemDetails(item) {
@@ -436,19 +450,25 @@ const UI = {
 
         const handleFile = async (file) => {
             if (!file) return;
-            const compressed = await compressImage(file);
             State.tempUploadMime = file.type;
-            const cropRect = await CropTool.open(compressed);
+            const rawBase64 = await new Promise((res, rej) => {
+                const r = new FileReader();
+                r.onload = () => res(r.result);
+                r.onerror = rej;
+                r.readAsDataURL(file);
+            });
+            const cropRect = await CropTool.open(rawBase64);
             if (!cropRect) { this.resetUploadForm(); return; }
-            State.tempUploadBase64 = await cropImage(compressed, cropRect);
+            const cropped = await cropImage(rawBase64, cropRect);
+            State.tempUploadBase64 = await compressImage(cropped);
             document.getElementById('upload-preview').src = State.tempUploadBase64;
             document.getElementById('upload-preview-container').classList.remove('hidden');
             this.setUploadState('loading');
             try {
                 const items = await Gemini.autoTagClothingItem(State.tempUploadBase64, State.tempUploadMime);
-                this.renderDetectedItems(items);
+                this.renderDetectedItems(items?.[0] || FALLBACK_ITEM);
             } catch {
-                this.renderDetectedItems([FALLBACK_ITEM]);
+                this.renderDetectedItems(FALLBACK_ITEM);
             }
             this.setUploadState('ready');
         };
@@ -460,30 +480,26 @@ const UI = {
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
-            if (!State.tempUploadBase64) { alert("Please upload a clothing item photo first."); return; }
-            const cards = document.querySelectorAll('.detected-item-card');
-            if (cards.length === 0) { alert("No items in the list to save."); return; }
+            if (!State.tempUploadBase64) { showToast('Upload a photo first', 'error'); return; }
             try {
-                for (const card of cards) {
-                    const item = {
-                        image: State.tempUploadBase64,
-                        name: card.querySelector('.detect-item-name').value,
-                        category: card.querySelector('.detect-item-category').value,
-                        colorHex: card.querySelector('.detect-item-color').value,
-                        colorName: card.querySelector('.detect-item-color-name').value,
-                        style: card.querySelector('.detect-item-style').value,
-                        season: card.querySelector('.detect-item-season').value,
-                        notes: card.querySelector('.detect-item-notes').value,
-                        createdAt: new Date().toISOString()
-                    };
-                    item.id = await DB.addItem(item);
-                    State.wardrobe.push(item);
-                }
-                alert(`Successfully added ${cards.length} item${cards.length > 1 ? 's' : ''} to your Wardrobe!`);
+                const item = {
+                    image: State.tempUploadBase64,
+                    name: document.querySelector('.detect-item-name')?.value,
+                    category: document.querySelector('.detect-item-category')?.value,
+                    colorHex: document.querySelector('.detect-item-color')?.value,
+                    colorName: document.querySelector('.detect-item-color-name')?.value,
+                    style: document.querySelector('.detect-item-style')?.value,
+                    season: document.querySelector('.detect-item-season')?.value,
+                    notes: document.querySelector('.detect-item-notes')?.value || '',
+                    createdAt: new Date().toISOString()
+                };
+                item.id = await DB.addItem(item);
+                State.wardrobe.push(item);
+                showToast('Added to your Wardrobe!', 'success');
                 this.resetUploadForm();
                 this.switchView('view-wardrobe');
             } catch (err) {
-                alert("Failed to save clothing items: " + err);
+                showToast('Failed to save: ' + err, 'error');
             }
         });
     },
@@ -512,56 +528,40 @@ const UI = {
         State.tempUploadMime = null;
     },
 
-    renderDetectedItems(items) {
+    renderDetectedItems(item) {
         const container = document.getElementById('detected-items-container');
-        container.innerHTML = '';
-        items.forEach((item, index) => {
-            const card = document.createElement('div');
-            card.className = 'detected-item-card';
-            card.innerHTML = `
-                <div class="detected-item-header">
-                    <span class="detected-item-index">Item #${index + 1}</span>
-                    <button type="button" class="btn-remove-detected" title="Remove this item">&times;</button>
+        container.innerHTML = `
+            <div class="form-group">
+                <label>Item Name</label>
+                <input type="text" class="detect-item-name" value="${item.name || ''}" placeholder="e.g. Navy Blue Jeans" required>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Category</label>
+                    <select class="detect-item-category" required>${opts(CATEGORIES, CAT_LABELS, item.category)}</select>
                 </div>
                 <div class="form-group">
-                    <label>Item Name</label>
-                    <input type="text" class="detect-item-name" value="${item.name || ''}" placeholder="e.g. Navy Blue Jeans" required>
-                </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Category</label>
-                        <select class="detect-item-category" required>${opts(CATEGORIES, CAT_LABELS, item.category)}</select>
-                    </div>
-                    <div class="form-group">
-                        <label>Color Swatch</label>
-                        <div class="color-picker-wrapper">
-                            <input type="color" class="detect-item-color" value="${item.colorHex || '#3b82f6'}">
-                            <input type="text" class="detect-item-color-name" value="${item.colorName || ''}" placeholder="e.g. Tan Brown" required>
-                        </div>
+                    <label>Color Swatch</label>
+                    <div class="color-picker-wrapper">
+                        <input type="color" class="detect-item-color" value="${item.colorHex || '#3b82f6'}">
+                        <input type="text" class="detect-item-color-name" value="${item.colorName || ''}" placeholder="e.g. Tan Brown" required>
                     </div>
                 </div>
-                <div class="form-row">
-                    <div class="form-group">
-                        <label>Style</label>
-                        <select class="detect-item-style">${opts(STYLES, STYLE_LABELS, item.style)}</select>
-                    </div>
-                    <div class="form-group">
-                        <label>Best For Weather</label>
-                        <select class="detect-item-season">${opts(SEASONS, SEASON_LABELS, item.season)}</select>
-                    </div>
+            </div>
+            <div class="form-row">
+                <div class="form-group">
+                    <label>Style</label>
+                    <select class="detect-item-style">${opts(STYLES, STYLE_LABELS, item.style)}</select>
                 </div>
                 <div class="form-group">
-                    <label>Notes (Optional)</label>
-                    <input type="text" class="detect-item-notes" value="${item.notes || ''}" placeholder="e.g. Slim fit cotton">
-                </div>`;
-            card.querySelector('.btn-remove-detected').addEventListener('click', () => {
-                card.remove();
-                const remaining = container.querySelectorAll('.detected-item-card');
-                if (remaining.length === 0) this.resetUploadForm();
-                else remaining.forEach((c, idx) => c.querySelector('.detected-item-index').innerText = `Item #${idx + 1}`);
-            });
-            container.appendChild(card);
-        });
+                    <label>Best For Weather</label>
+                    <select class="detect-item-season">${opts(SEASONS, SEASON_LABELS, item.season)}</select>
+                </div>
+            </div>
+            <div class="form-group">
+                <label>Notes (Optional)</label>
+                <input type="text" class="detect-item-notes" value="${item.notes || ''}" placeholder="e.g. Slim fit cotton">
+            </div>`;
     },
 
     setupChat() {
@@ -631,7 +631,7 @@ const UI = {
         const btn = document.getElementById('btn-run-analysis');
         const container = document.getElementById('analysis-results');
         btn.addEventListener('click', async () => {
-            if (!State.apiKey) { alert("Please add a Gemini API Key in Settings to run gap analysis."); return; }
+            if (!State.apiKey) { showToast('Add a Gemini API Key in Settings first', 'error'); return; }
             btn.disabled = true;
             btn.innerHTML = '<div class="spinner" style="width:14px;height:14px;border-width:2px;margin-right:8px;display:inline-block"></div> Running AI Analysis...';
             container.classList.add('hidden');
@@ -646,7 +646,7 @@ const UI = {
                     container.appendChild(c);
                 });
                 container.classList.remove('hidden');
-            } catch (err) { alert("Gap Analysis failed: " + err.message); }
+            } catch (err) { showToast('Analysis failed: ' + err.message, 'error'); }
             finally { btn.disabled = false; btn.innerHTML = '<span>Analyze Wardrobe Gaps</span>'; }
         });
     },
@@ -660,7 +660,7 @@ const UI = {
             State.apiKey = input.value.trim();
             localStorage.setItem('dripchat_api_key', State.apiKey);
             this.updateConnectionStatus();
-            alert("Settings updated successfully!");
+            showToast('Settings saved!', 'success');
         });
         const cave = document.getElementById('caveman-checkbox');
         if (cave) cave.addEventListener('change', (e) => {
@@ -668,7 +668,7 @@ const UI = {
             localStorage.setItem('dripchat_caveman', State.cavemanMode);
         });
         document.getElementById('btn-export-wardrobe').addEventListener('click', () => {
-            if (State.wardrobe.length === 0) { alert("Your wardrobe is empty. Add items first."); return; }
+            if (State.wardrobe.length === 0) { showToast('Your wardrobe is empty. Add items first.', 'error'); return; }
             const blob = new Blob([JSON.stringify({ version: 1, items: State.wardrobe })], { type: 'application/json' });
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
@@ -691,11 +691,11 @@ const UI = {
                     clean.id = await DB.addItem(clean);
                     State.wardrobe.push(clean);
                 }
-                alert("Backup imported successfully!");
+                showToast('Backup imported!', 'success');
                 importInput.value = '';
                 this.renderWardrobe();
                 this.renderStorageStats();
-            } catch (err) { alert("Import failed: " + err.message); }
+            } catch (err) { showToast('Import failed: ' + err.message, 'error'); }
         });
         document.getElementById('btn-reset-db').addEventListener('click', async () => {
             if (!confirm("WARNING: This will permanently delete your entire wardrobe. Are you sure?")) return;
@@ -703,7 +703,7 @@ const UI = {
             State.wardrobe = [];
             this.renderWardrobe();
             this.renderStorageStats();
-            alert("Database reset successful.");
+            showToast('Database reset.', 'success');
         });
     },
 
@@ -825,7 +825,24 @@ const UI = {
                 imgEl.style.cssText = 'max-width:100%;display:block;border-radius:14px;margin-top:14px';
                 bubble.appendChild(imgEl);
             }
-        } catch (e) {}
+        } catch (e) {
+            console.warn('Look composite generation failed:', e);
+        }
+    },
+
+    setupRipple() {
+        document.querySelectorAll('.btn').forEach(btn => {
+            btn.addEventListener('click', function(e) {
+                const rect = this.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const y = e.clientY - rect.top;
+                const ripple = document.createElement('span');
+                ripple.className = 'ripple';
+                ripple.style.cssText = `left:${x}px;top:${y}px`;
+                this.appendChild(ripple);
+                setTimeout(() => ripple.remove(), 600);
+            });
+        });
     }
 };
 
