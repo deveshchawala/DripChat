@@ -4,6 +4,11 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, minimum-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>DripChat - AI Wardrobe Assistant</title>
+    <!-- PWA -->
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#f59e0b">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -13,11 +18,20 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div id="app-container">
+    <!-- Loading splash screen -->
+    <div id="app-loader" class="app-loader">
+        <div class="loader-content">
+            <span class="loader-icon"><svg viewBox="0 0 24 24" width="48" height="48" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="badge-grad-loader" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient></defs><rect x="2" y="2" width="20" height="20" rx="7" fill="url(#badge-grad-loader)"/><path d="M8.5 7.5H11.5C14.26 7.5 16 9.5 16 12C16 14.5 14.26 16.5 11.5 16.5H8.5V7.5Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
+            <h2 class="loader-title">DripChat</h2>
+            <div class="spinner"></div>
+        </div>
+    </div>
+
+    <div id="app-container" class="app-hidden">
         <!-- TOP NAVIGATION / HEADER -->
         <header id="app-header">
             <div class="header-logo">
-                <span class="logo-icon">✨</span>
+                <span class="logo-icon"><svg viewBox="0 0 24 24" width="22" height="22" fill="none" xmlns="http://www.w3.org/2000/svg"><defs><linearGradient id="badge-grad" x1="0%" y1="0%" x2="100%" y2="100%"><stop offset="0%" stop-color="#f59e0b"/><stop offset="100%" stop-color="#d97706"/></linearGradient></defs><rect x="2" y="2" width="20" height="20" rx="7" fill="url(#badge-grad)"/><path d="M8.5 7.5H11.5C14.26 7.5 16 9.5 16 12C16 14.5 14.26 16.5 11.5 16.5H8.5V7.5Z" stroke="white" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" fill="none"/></svg></span>
                 <h1>DripChat</h1>
             </div>
             <div id="connection-indicator" class="status-dot disconnected" title="Gemini API Key Required"></div>
@@ -26,12 +40,24 @@
         <!-- MAIN VIEWS CONTAINER -->
         <main id="app-main">
             <!-- 1. WARDROBE VIEW -->
-            <section id="view-wardrobe" class="app-view active">
+            <section id="view-wardrobe" class="app-view active" role="tabpanel" aria-labelledby="tab-wardrobe">
                 <div class="view-header">
                     <h2>My Wardrobe</h2>
                     <p class="view-subtitle">Your collection of outfits</p>
                 </div>
                 
+                <!-- Search Bar -->
+                <div class="search-bar">
+                    <input type="text" id="wardrobe-search" placeholder="Search items..." aria-label="Search wardrobe">
+                    <select id="wardrobe-sort" aria-label="Sort wardrobe">
+                        <option value="newest">Newest</option>
+                        <option value="oldest">Oldest</option>
+                        <option value="name-az">Name A-Z</option>
+                        <option value="name-za">Name Z-A</option>
+                        <option value="category">Category</option>
+                    </select>
+                </div>
+
                 <!-- Filters Bar -->
                 <div class="filter-bar">
                     <button class="filter-chip active" data-category="all">All</button>
@@ -55,14 +81,14 @@
             </section>
 
             <!-- 2. AI CHAT ASSISTANT VIEW -->
-            <section id="view-chat" class="app-view">
+            <section id="view-chat" class="app-view" role="tabpanel" aria-labelledby="tab-chat">
                 <div class="view-header">
                     <h2>AI Assistant</h2>
                     <p class="view-subtitle">Ask what to wear today</p>
                 </div>
 
                 <!-- Chat Messages Feed -->
-                <div id="chat-messages" class="messages-container">
+                <div id="chat-messages" class="messages-container" role="log" aria-live="polite" aria-label="Chat messages">
                     <div class="message assistant">
                         <div class="message-bubble">
                             Hey there! 👋 I am <strong>DripChat</strong>, your personal wardrobe assistant. 
@@ -77,6 +103,7 @@
 
                 <!-- Chat Input Dock -->
                 <div class="chat-input-bar">
+                    <button id="btn-weather" class="btn btn-icon-sm" aria-label="Add current weather" title="Add weather to message">🌤️</button>
                     <textarea id="chat-input" placeholder="e.g. Cozy outfit for a rainy 15°C afternoon coffee date..." rows="1"></textarea>
                     <button id="btn-send-chat" class="btn btn-icon btn-primary" aria-label="Send message">
                         <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
@@ -88,7 +115,7 @@
             </section>
 
             <!-- 3. ADD ITEM VIEW -->
-            <section id="view-add" class="app-view">
+            <section id="view-add" class="app-view" role="tabpanel" aria-labelledby="tab-add">
                 <div class="view-header">
                     <h2>Add to Wardrobe</h2>
                     <p class="view-subtitle">Snap or upload a photo of your clothes</p>
@@ -110,8 +137,8 @@
                         </div>
                         <div id="upload-preview-container" class="hidden">
                             <img id="upload-preview" src="" alt="Clothing preview">
-                            <div id="scanner-line" class="scanning"></div>
-                            <button id="btn-clear-upload" class="btn-clear">&times;</button>
+                            <div id="scanner-line"></div>
+                            <button id="btn-clear-upload" class="btn-clear" aria-label="Clear upload">&times;</button>
                         </div>
                     </div>
 
@@ -132,7 +159,7 @@
             </section>
 
             <!-- 4. GAP ANALYSIS / SHOPPING VIEW -->
-            <section id="view-shop" class="app-view">
+            <section id="view-shop" class="app-view" role="tabpanel" aria-labelledby="tab-shop">
                 <div class="view-header">
                     <h2>Wardrobe Analysis</h2>
                     <p class="view-subtitle">Discover missing pieces to unlock new outfits</p>
@@ -152,11 +179,19 @@
                     <div id="analysis-results" class="analysis-results-container hidden">
                         <!-- Loaded via JS -->
                     </div>
+
+                    <!-- Saved Looks -->
+                    <div class="saved-looks-section">
+                        <h3 class="saved-looks-title">Saved Looks</h3>
+                        <div id="saved-looks-grid" class="saved-looks-grid">
+                            <p class="saved-looks-empty" id="saved-looks-empty">No saved looks yet. Save outfits from the AI chat!</p>
+                        </div>
+                    </div>
                 </div>
             </section>
 
             <!-- 5. SETTINGS VIEW -->
-            <section id="view-settings" class="app-view">
+            <section id="view-settings" class="app-view" role="tabpanel" aria-labelledby="tab-settings">
                 <div class="view-header">
                     <h2>Settings</h2>
                     <p class="view-subtitle">Customize and manage your assistant</p>
@@ -172,7 +207,7 @@
                             <label for="api-key-input">Gemini API Key</label>
                             <div class="password-input-wrapper">
                                 <input type="password" id="api-key-input" placeholder="Enter AI Studio API Key...">
-                                <button type="button" id="btn-toggle-key" class="btn-toggle-view">👁️</button>
+                                <button type="button" id="btn-toggle-key" class="btn-toggle-view" aria-label="Toggle password visibility">👁️</button>
                             </div>
                             <span class="input-helper-text">Get a free key from <a href="https://aistudio.google.com/" target="_blank" rel="noopener">Google AI Studio</a>.</span>
                         </div>
@@ -206,6 +241,20 @@
 
                     <!-- Storage & Database Reset -->
                     <div class="settings-card">
+                        <h3>📊 Wardrobe Stats</h3>
+                        <div id="wardrobe-stats-dashboard" class="stats-dashboard">
+                            <div class="stats-row">
+                                <span>Total Items:</span>
+                                <strong id="stats-total">0</strong>
+                            </div>
+                            <div id="stats-categories" class="stats-categories"></div>
+                            <div id="stats-styles" class="stats-styles"></div>
+                            <div id="stats-colors" class="stats-color-palette"></div>
+                        </div>
+                    </div>
+
+                    <!-- System Management -->
+                    <div class="settings-card">
                         <h3>⚠️ System Management</h3>
                         <div class="storage-stats">
                             <div class="stat-row">
@@ -219,14 +268,21 @@
                         </div>
                         <button id="btn-reset-db" class="btn btn-danger btn-block">🗑️ Reset Database</button>
                     </div>
+
+                    <!-- Chat Management -->
+                    <div class="settings-card">
+                        <h3>💬 Chat History</h3>
+                        <p class="card-hint">Clear your conversation history with the AI assistant.</p>
+                        <button id="btn-clear-chat" class="btn btn-secondary btn-block">🧹 Clear Chat History</button>
+                    </div>
                 </div>
             </section>
         </main>
 
         <!-- BOTTOM TAB NAVIGATION BAR -->
-        <nav id="app-nav">
-            <button class="nav-tab active" data-target="view-wardrobe">
-                <div class="tab-icon">
+        <nav id="app-nav" role="tablist" aria-label="Main navigation">
+            <button class="nav-tab active" data-target="view-wardrobe" role="tab" aria-selected="true" aria-controls="view-wardrobe">
+                <div class="tab-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"></path>
                         <line x1="7" y1="7" x2="7.01" y2="7"></line>
@@ -234,16 +290,16 @@
                 </div>
                 <span class="tab-label">Wardrobe</span>
             </button>
-            <button class="nav-tab" data-target="view-chat">
-                <div class="tab-icon">
+            <button class="nav-tab" data-target="view-chat" role="tab" aria-selected="false" aria-controls="view-chat">
+                <div class="tab-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"></path>
                     </svg>
                 </div>
                 <span class="tab-label">Assistant</span>
             </button>
-            <button class="nav-tab highlight" data-target="view-add">
-                <div class="tab-icon">
+            <button class="nav-tab highlight" data-target="view-add" role="tab" aria-selected="false" aria-controls="view-add">
+                <div class="tab-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="12" y1="5" x2="12" y2="19"></line>
                         <line x1="5" y1="12" x2="19" y2="12"></line>
@@ -251,8 +307,8 @@
                 </div>
                 <span class="tab-label">Add</span>
             </button>
-            <button class="nav-tab" data-target="view-shop">
-                <div class="tab-icon">
+            <button class="nav-tab" data-target="view-shop" role="tab" aria-selected="false" aria-controls="view-shop">
+                <div class="tab-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <line x1="18" y1="20" x2="18" y2="10"></line>
                         <line x1="12" y1="20" x2="12" y2="4"></line>
@@ -262,8 +318,8 @@
                 </div>
                 <span class="tab-label">Analysis</span>
             </button>
-            <button class="nav-tab" data-target="view-settings">
-                <div class="tab-icon">
+            <button class="nav-tab" data-target="view-settings" role="tab" aria-selected="false" aria-controls="view-settings">
+                <div class="tab-icon" aria-hidden="true">
                     <svg viewBox="0 0 24 24" width="24" height="24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                         <circle cx="12" cy="12" r="3"></circle>
                         <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path>
@@ -303,7 +359,7 @@
     <!-- UI Modal for viewing clothing item details -->
     <div id="item-modal" class="modal-overlay hidden">
         <div class="modal-content">
-            <button id="btn-close-modal" class="modal-close-btn">&times;</button>
+            <button id="btn-close-modal" class="modal-close-btn" aria-label="Close modal">&times;</button>
             <div class="modal-hero">
                 <img id="modal-item-img" src="" alt="Clothing item image">
                 <div class="modal-category-badge" id="modal-item-category">Tops</div>
@@ -319,12 +375,24 @@
                     <h4>Notes</h4>
                     <p id="modal-item-notes">No notes available.</p>
                 </div>
+                <button id="btn-edit-item" class="btn btn-secondary btn-block">Edit Item</button>
                 <button id="btn-delete-item" class="btn btn-danger btn-block">Delete Item</button>
             </div>
         </div>
     </div>
 
-    <div id="toast-container"></div>
+    <!-- Confirm Dialog -->
+    <div id="confirm-modal" class="modal-overlay hidden">
+        <div class="confirm-modal-content">
+            <p id="confirm-message"></p>
+            <div class="confirm-actions">
+                <button id="btn-confirm-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-confirm-ok" class="btn btn-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="toast-container" role="alert" aria-live="polite" aria-atomic="true"></div>
     <script src="app.js"></script>
 </body>
 </html>

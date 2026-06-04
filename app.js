@@ -1,6 +1,7 @@
 const State = {
     apiKey: '', wardrobe: [],
-    tempUploadBase64: null, tempUploadMime: null, cavemanMode: false
+    tempUploadBase64: null, tempUploadMime: null, cavemanMode: false,
+    chatHistory: [], savedLooks: []
 };
 
 const idb = (method, arg) => new Promise((res, rej) => {
@@ -25,12 +26,13 @@ const DB = {
     },
     addItem: (item) => idb('add', item),
     getAllItems: () => idb('getAll'),
+    updateItem: (item) => idb('put', item),
     deleteItem: (id) => idb('delete', id),
     clearAll: () => idb('clear')
 };
 
 function compressImage(src) {
-    const maxDimension = 800;
+    const maxDimension = 600;
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.onload = () => {
@@ -40,24 +42,20 @@ function compressImage(src) {
             else { if (h > maxDimension) { w = Math.round(w * maxDimension / h); h = maxDimension; } }
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.75));
+            resolve(canvas.toDataURL('image/jpeg', 0.65));
         };
         img.onerror = () => reject("Invalid image file.");
-        if (src instanceof File) {
-            const r = new FileReader();
-            r.onload = () => { img.src = r.result; };
-            r.onerror = () => reject("File reading failed.");
-            r.readAsDataURL(src);
-        } else {
-            img.src = src;
-        }
+        img.src = src;
     });
 }
 
 function calculateFormatSize(items) {
     const bytes = items.reduce((t, i) => {
-        if (i.image) t += i.image.length * 0.75;
-        return t + JSON.stringify(i).length;
+        const jsonStr = JSON.stringify(i);
+        // Count metadata (non-image fields) + actual image bytes (base64 -> raw bytes)
+        const metaBytes = jsonStr.length - (i.image ? i.image.length : 0);
+        const imageBytes = i.image ? i.image.length * 0.75 : 0;
+        return t + metaBytes + imageBytes;
     }, 0);
     return (bytes / (1024 * 1024)).toFixed(2);
 }
@@ -75,19 +73,92 @@ function cropImage(base64Image, bbox) {
             const canvas = document.createElement('canvas');
             canvas.width = w; canvas.height = h;
             canvas.getContext('2d').drawImage(img, x, y, w, h, 0, 0, w, h);
-            resolve(canvas.toDataURL('image/jpeg', 0.75));
+            resolve(canvas.toDataURL('image/jpeg', 0.65));
         };
         img.onerror = () => reject("Image crop failed.");
         img.src = base64Image;
     });
 }
 
+function escapeHtml(str) {
+    if (str == null) return '';
+    return String(str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function parseJSON(text) {
+    // Strip markdown code fences that LLMs sometimes wrap JSON in
+    const cleaned = text.replace(/^```(?:json)?\s*\n?/i, '').replace(/\n?```\s*$/i, '').trim();
+    return JSON.parse(cleaned);
+}
+
+function saveChatHistory() {
+    // Keep last 50 messages to avoid bloating localStorage
+    const toSave = State.chatHistory.slice(-50);
+    try { localStorage.setItem('dripchat_chat_history', JSON.stringify(toSave)); }
+    catch { /* quota exceeded — ignore */ }
+}
+
+function formatRelativeTime(date) {
+    const seconds = Math.floor((Date.now() - date.getTime()) / 1000);
+    if (seconds < 5) return 'Just now';
+    if (seconds < 60) return `${seconds}s ago`;
+    const minutes = Math.floor(seconds / 60);
+    if (minutes < 60) return `${minutes}m ago`;
+    const hours = Math.floor(minutes / 60);
+    if (hours < 24) return `${hours}h ago`;
+    const days = Math.floor(hours / 24);
+    return `${days}d ago`;
+}
+
+function showConfirm(message) {
+    return new Promise((resolve) => {
+        const modal = document.getElementById('confirm-modal');
+        document.getElementById('confirm-message').textContent = message;
+        modal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+        const cleanup = (result) => {
+            modal.classList.add('hidden');
+            document.body.classList.remove('modal-open');
+            okBtn.removeEventListener('click', onOk);
+            cancelBtn.removeEventListener('click', onCancel);
+            document.removeEventListener('keydown', onKey);
+            modal.removeEventListener('click', onBackdrop);
+            resolve(result);
+        };
+        const onOk = () => cleanup(true);
+        const onCancel = () => cleanup(false);
+        const onKey = (e) => { if (e.key === 'Escape') cleanup(false); };
+        const onBackdrop = (e) => { if (e.target === modal) cleanup(false); };
+        const okBtn = document.getElementById('btn-confirm-ok');
+        const cancelBtn = document.getElementById('btn-confirm-cancel');
+        okBtn.addEventListener('click', onOk);
+        cancelBtn.addEventListener('click', onCancel);
+        document.addEventListener('keydown', onKey);
+        modal.addEventListener('click', onBackdrop);
+        cancelBtn.focus();
+    });
+}
+
 function showToast(message, type, duration = 3000) {
     const container = document.getElementById('toast-container');
+    // Cap visible toasts at 3
+    const existing = container.querySelectorAll('.toast:not(.out)');
+    if (existing.length >= 3) existing[0].classList.add('out');
     const el = document.createElement('div');
     el.className = `toast${type ? ' ' + type : ''}`;
     el.textContent = message;
     container.appendChild(el);
+    // Telegram haptic feedback
+    if (window.Telegram?.WebApp?.HapticFeedback) {
+        if (type === 'success') window.Telegram.WebApp.HapticFeedback.notificationOccurred('success');
+        else if (type === 'error') window.Telegram.WebApp.HapticFeedback.notificationOccurred('error');
+        else window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+    }
     setTimeout(() => {
         el.classList.add('out');
         setTimeout(() => el.remove(), 250);
@@ -104,6 +175,16 @@ const TelegramIntegration = {
             if (tg.themeParams?.bg_color)
                 document.documentElement.style.setProperty('--bg-color', tg.themeParams.bg_color);
         }
+        // Offline/online indicators
+        window.addEventListener('offline', () => {
+            document.body.classList.add('is-offline');
+            showToast('You are offline', 'error');
+        });
+        window.addEventListener('online', () => {
+            document.body.classList.remove('is-offline');
+            showToast('Back online', 'success');
+        });
+        if (!navigator.onLine) document.body.classList.add('is-offline');
     }
 };
 
@@ -119,6 +200,7 @@ const FALLBACK_ITEM = { name: '', category: 'tops', colorHex: '#3b82f6', colorNa
 const Gemini = {
     async callAPI(payload, systemInstruction = null, retries = 3) {
         if (!State.apiKey) throw new Error("No Gemini API key supplied. Go to Settings to enter one.");
+        if (!navigator.onLine) throw new Error("You're offline. Please check your internet connection.");
         const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=${State.apiKey}`;
         const body = { contents: payload.contents };
         if (systemInstruction) body.systemInstruction = { parts: [{ text: systemInstruction }] };
@@ -151,19 +233,19 @@ Each object: {"name":"short name","category":"tops|bottoms|outerwear|shoes|acces
                 { inlineData: { mimeType: mimeType || 'image/jpeg', data: base64Image.split(',')[1] } }
             ]}]
         };
-        return JSON.parse(await this.callAPI(payload));
+        return parseJSON(await this.callAPI(payload));
     },
 
     async suggestOutfit(userInput, extraInstruction = null) {
         const list = State.wardrobe.map(i => `- [ID:${i.id}] ${i.name} (${i.category}, ${i.colorName}, ${i.style}, ${i.season})`).join('\n');
         let system = `You are DripChat, a stylish wardrobe assistant. User's wardrobe:\n${list || 'Empty. Ask them to add clothes first.'}\n\nRules: 1) ONLY recommend items EXACTLY from wardrobe above. 2) Suggest 2-3 outfits for their scenario. 3) Brief, fashion-forward, bold headings, smartphone-friendly. 4) After EACH look, on a new line put: [IDs: {comma-separated item IDs}]. This ID line is internal only.`;
         if (extraInstruction) system = `${extraInstruction}\n\n${system}`;
-        const msgs = Array.from(document.querySelectorAll('.message')).slice(-6).map(m => ({
-            role: m.classList.contains('user') ? 'user' : 'model',
-            parts: [{ text: m.querySelector('.message-bubble').innerText }]
+        const history = State.chatHistory.slice(-6).map(m => ({
+            role: m.role,
+            parts: [{ text: m.role === 'model' ? m.text.replace(/\[IDs:.*?\]/gi, '').trim() : m.text }]
         }));
-        msgs.push({ role: 'user', parts: [{ text: userInput }] });
-        return this.callAPI({ contents: msgs }, system);
+        history.push({ role: 'user', parts: [{ text: userInput }] });
+        return this.callAPI({ contents: history }, system);
     },
 
     async analyzeWardrobeGaps() {
@@ -171,7 +253,7 @@ Each object: {"name":"short name","category":"tops|bottoms|outerwear|shoes|acces
         const system = `Analyze wardrobe inventory and recommend 3 strategic purchases to maximize outfit versatility. Return JSON array strictly:
 [{"title":"specific item to buy","category":"shoes|tops|bottoms|outerwear|accessories","priority":"high|medium","reason":"why it fills a gap"}]
 Inventory:\n${list || 'EMPTY'}`;
-        return JSON.parse(await this.callAPI({ jsonMode: true, contents: [{ parts: [{ text: 'Analyze my wardrobe gaps.' }] }] }, system));
+        return parseJSON(await this.callAPI({ jsonMode: true, contents: [{ parts: [{ text: 'Analyze my wardrobe gaps.' }] }] }, system));
     }
 };
 
@@ -186,14 +268,19 @@ const CropTool = {
         return new Promise((resolve) => {
             this.resolve = resolve;
             document.getElementById('crop-modal').classList.remove('hidden');
+            document.body.classList.add('modal-open');
             const img = document.getElementById('crop-image');
             img.onload = () => {
                 this.img = img;
                 this.wrapper = document.getElementById('crop-wrapper');
                 this.box = document.getElementById('crop-box');
-                this.calcDimensions();
-                this.initBox();
-                this.bindEvents();
+                // Defer dimension calculation until after the browser has painted
+                // the now-visible modal, so getBoundingClientRect() returns real values.
+                requestAnimationFrame(() => {
+                    this.calcDimensions();
+                    this.initBox();
+                    this.bindEvents();
+                });
             };
             img.src = base64;
         });
@@ -201,6 +288,7 @@ const CropTool = {
 
     close() {
         document.getElementById('crop-modal').classList.add('hidden');
+        document.body.classList.remove('modal-open');
         this.unbindEvents();
     },
 
@@ -260,9 +348,8 @@ const CropTool = {
 
     handlePointerDown(e) {
         e.preventDefault();
-        const t = e.target;
-        if (t.classList.contains('crop-handle') || t.closest('.crop-handle')) {
-            const handle = t.closest('.crop-handle');
+        const handle = e.target.closest('.crop-handle');
+        if (handle) {
             this.mode = 'resize-' + handle.getAttribute('data-dir');
         } else {
             this.mode = 'move';
@@ -363,40 +450,80 @@ const UI = {
         this.setupGapAnalysis();
         this.updateConnectionStatus();
         this.setupRipple();
+        this.setupSwipeNav();
     },
 
     setupNavigation() {
-        document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', () => this.switchView(t.getAttribute('data-target'))));
+        document.querySelectorAll('.nav-tab').forEach(t => t.addEventListener('click', () => {
+            if (window.Telegram?.WebApp?.HapticFeedback) window.Telegram.WebApp.HapticFeedback.impactOccurred('light');
+            this.switchView(t.getAttribute('data-target'));
+        }));
         document.querySelector('.btn-tab-trigger')?.addEventListener('click', (e) => this.switchView(e.currentTarget.getAttribute('data-target')));
     },
 
     switchView(viewId) {
-        document.querySelectorAll('.app-view').forEach(v => v.classList.remove('active'));
+        const currentActive = document.querySelector('.app-view.active');
+        if (currentActive && currentActive.id !== viewId) {
+            currentActive.classList.remove('active');
+            currentActive.classList.add('exiting');
+            setTimeout(() => currentActive.classList.remove('exiting'), 200);
+        } else if (currentActive) {
+            currentActive.classList.remove('active');
+        }
         document.getElementById(viewId).classList.add('active');
         document.querySelectorAll('.nav-tab').forEach(t => {
-            t.classList.toggle('active', t.getAttribute('data-target') === viewId);
+            const isActive = t.getAttribute('data-target') === viewId;
+            t.classList.toggle('active', isActive);
+            t.setAttribute('aria-selected', isActive ? 'true' : 'false');
         });
         if (viewId === 'view-wardrobe') this.renderWardrobe();
         else if (viewId === 'view-settings') this.renderStorageStats();
+        else if (viewId === 'view-shop') this.renderSavedLooks();
     },
 
     setupWardrobeViews() {
         document.querySelector('.filter-bar').addEventListener('click', (e) => {
             const chip = e.target.closest('.filter-chip');
             if (!chip) return;
+            if (chip.classList.contains('active')) return;
             document.querySelectorAll('.filter-chip').forEach(c => c.classList.remove('active'));
             chip.classList.add('active');
-            this.renderWardrobe(chip.getAttribute('data-category'));
+            const searchInput = document.getElementById('wardrobe-search');
+            const sortSelect = document.getElementById('wardrobe-sort');
+            this.renderWardrobe(chip.getAttribute('data-category'), searchInput.value.trim().toLowerCase(), sortSelect.value);
         });
-        document.getElementById('btn-close-modal').addEventListener('click', () => {
+        const searchInput = document.getElementById('wardrobe-search');
+        const sortSelect = document.getElementById('wardrobe-sort');
+        const triggerRender = () => {
+            const activeChip = document.querySelector('.filter-chip.active');
+            const filter = activeChip ? activeChip.getAttribute('data-category') : 'all';
+            this.renderWardrobe(filter, searchInput.value.trim().toLowerCase(), sortSelect.value);
+        };
+        searchInput.addEventListener('input', triggerRender);
+        sortSelect.addEventListener('change', triggerRender);
+
+        const closeItemModal = () => {
             document.getElementById('item-modal').classList.add('hidden');
+            document.body.classList.remove('modal-open');
+        };
+        document.getElementById('btn-close-modal').addEventListener('click', closeItemModal);
+        document.getElementById('item-modal').addEventListener('click', (e) => { if (e.target.id === 'item-modal') closeItemModal(); });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape' && !document.getElementById('item-modal').classList.contains('hidden')) closeItemModal();
         });
     },
 
-    renderWardrobe(filter = 'all') {
+    renderWardrobe(filter = 'all', search = '', sort = 'newest') {
         const grid = document.getElementById('wardrobe-grid');
         const empty = document.getElementById('wardrobe-empty');
-        const items = filter === 'all' ? State.wardrobe : State.wardrobe.filter(i => i.category === filter);
+        let items = filter === 'all' ? [...State.wardrobe] : State.wardrobe.filter(i => i.category === filter);
+        if (search) items = items.filter(i => i.name.toLowerCase().includes(search) || (i.colorName && i.colorName.toLowerCase().includes(search)));
+        // Sort
+        if (sort === 'newest') items.sort((a, b) => (b.id || 0) - (a.id || 0));
+        else if (sort === 'oldest') items.sort((a, b) => (a.id || 0) - (b.id || 0));
+        else if (sort === 'name-az') items.sort((a, b) => a.name.localeCompare(b.name));
+        else if (sort === 'name-za') items.sort((a, b) => b.name.localeCompare(a.name));
+        else if (sort === 'category') items.sort((a, b) => a.category.localeCompare(b.category));
         grid.querySelectorAll('.item-card').forEach(el => el.remove());
         if (items.length === 0) {
             empty.classList.remove('hidden');
@@ -410,11 +537,37 @@ const UI = {
             const card = document.createElement('div');
             card.className = 'item-card';
             card.style.setProperty('--i', i);
-            card.innerHTML = `<div class="card-img-wrapper"><img src="${item.image}" alt="${item.name}" loading="lazy"><span class="card-badge">${item.category}</span></div><div class="card-info"><h4>${item.name}</h4><div class="card-meta"><span>${item.style}</span><div class="card-color-indicator" style="background:${item.colorHex}" title="${item.colorName}"></div></div></div>`;
+            card.innerHTML = `<div class="card-img-wrapper"><img data-src="${escapeHtml(item.image)}" alt="${escapeHtml(item.name)}"><span class="card-badge">${escapeHtml(item.category)}</span></div><div class="card-info"><h4>${escapeHtml(item.name)}</h4><div class="card-meta"><span>${escapeHtml(item.style)}</span><div class="card-color-indicator" style="background:${escapeHtml(item.colorHex)}" title="${escapeHtml(item.colorName)}"></div></div></div>`;
             card.addEventListener('click', () => this.showItemDetails(item));
             frag.appendChild(card);
         });
         grid.appendChild(frag);
+        // Lazy-load images using IntersectionObserver
+        this.observeCardImages(grid);
+    },
+
+    observeCardImages(container) {
+        if (!window.IntersectionObserver) {
+            // Fallback for browsers without IO: load all immediately
+            container.querySelectorAll('img[data-src]').forEach(img => {
+                img.src = img.getAttribute('data-src');
+                img.removeAttribute('data-src');
+                img.classList.add('loaded');
+            });
+            return;
+        }
+        const observer = new IntersectionObserver((entries) => {
+            for (const entry of entries) {
+                if (entry.isIntersecting) {
+                    const img = entry.target;
+                    img.src = img.getAttribute('data-src');
+                    img.removeAttribute('data-src');
+                    img.addEventListener('load', () => img.classList.add('loaded'));
+                    observer.unobserve(img);
+                }
+            }
+        }, { root: document.getElementById('app-main'), rootMargin: '200px' });
+        container.querySelectorAll('img[data-src]').forEach(img => observer.observe(img));
     },
 
     showItemDetails(item) {
@@ -426,17 +579,70 @@ const UI = {
         document.getElementById('modal-item-season').innerHTML = `&#127734; ${item.season}`;
         document.getElementById('modal-item-color').innerHTML = `<span class="color-dot" style="background:${item.colorHex}"></span> ${item.colorName}`;
         document.getElementById('modal-item-notes').innerText = item.notes || 'No extra notes provided.';
+
+        // Edit button
+        const edit = document.getElementById('btn-edit-item');
+        const editClone = edit.cloneNode(true);
+        edit.parentNode.replaceChild(editClone, edit);
+        editClone.addEventListener('click', () => {
+            modal.classList.add('hidden');
+            document.body.classList.remove('modal-open');
+            this.openEditForm(item);
+        });
+
+        // Delete button
         const del = document.getElementById('btn-delete-item');
         const clone = del.cloneNode(true);
         del.parentNode.replaceChild(clone, del);
         clone.addEventListener('click', async () => {
-            if (!confirm(`Delete "${item.name}"?`)) return;
+            if (!await showConfirm(`Delete "${item.name}"?`)) return;
             await DB.deleteItem(item.id);
             State.wardrobe = State.wardrobe.filter(w => w.id !== item.id);
             modal.classList.add('hidden');
+            document.body.classList.remove('modal-open');
             this.renderWardrobe();
         });
         modal.classList.remove('hidden');
+        document.body.classList.add('modal-open');
+    },
+
+    openEditForm(item) {
+        this._editMode = true;
+        this.switchView('view-add');
+        document.getElementById('upload-preview').src = item.image;
+        document.getElementById('upload-preview-container').classList.remove('hidden');
+        document.querySelector('.upload-content').classList.add('hidden');
+        State.tempUploadBase64 = item.image;
+        State.tempUploadMime = 'image/jpeg';
+        this.renderDetectedItems(item);
+        document.getElementById('clothing-form').classList.remove('hidden');
+        // Temporarily override form submission for edit
+        const form = document.getElementById('clothing-form');
+        const handler = async (e) => {
+            e.preventDefault();
+            try {
+                item.name = document.querySelector('.detect-item-name')?.value;
+                item.category = document.querySelector('.detect-item-category')?.value;
+                item.colorHex = document.querySelector('.detect-item-color')?.value;
+                item.colorName = document.querySelector('.detect-item-color-name')?.value;
+                item.style = document.querySelector('.detect-item-style')?.value;
+                item.season = document.querySelector('.detect-item-season')?.value;
+                item.notes = document.querySelector('.detect-item-notes')?.value || '';
+                item.image = State.tempUploadBase64;
+                await DB.updateItem(item);
+                const idx = State.wardrobe.findIndex(w => w.id === item.id);
+                if (idx !== -1) State.wardrobe[idx] = item;
+                showToast('Item updated!', 'success');
+                this.resetUploadForm();
+                this._editMode = false;
+                this.switchView('view-wardrobe');
+            } catch (err) {
+                showToast('Update failed: ' + err, 'error');
+            }
+            form.removeEventListener('submit', handler);
+            this._editMode = false;
+        };
+        form.addEventListener('submit', handler);
     },
 
     setupUploader() {
@@ -447,6 +653,27 @@ const UI = {
 
         document.getElementById('btn-take-photo').addEventListener('click', () => cameraInput.click());
         document.getElementById('btn-browse-gallery').addEventListener('click', () => galleryInput.click());
+
+        // Drag and drop support
+        const uploadBox = document.getElementById('upload-box');
+        uploadBox.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            uploadBox.classList.add('drag-over');
+        });
+        uploadBox.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            uploadBox.classList.remove('drag-over');
+        });
+        uploadBox.addEventListener('drop', (e) => {
+            e.preventDefault();
+            uploadBox.classList.remove('drag-over');
+            const file = e.dataTransfer.files[0];
+            if (file && file.type.startsWith('image/')) {
+                handleFile(file);
+            } else {
+                showToast('Please drop an image file', 'error');
+            }
+        });
 
         const handleFile = async (file) => {
             if (!file) return;
@@ -468,7 +695,9 @@ const UI = {
                 const items = await Gemini.autoTagClothingItem(State.tempUploadBase64, State.tempUploadMime);
                 this.renderDetectedItems(items?.[0] || FALLBACK_ITEM);
             } catch {
+                showToast('Auto-tagging failed. Please fill details manually.', 'error');
                 this.renderDetectedItems(FALLBACK_ITEM);
+                this.showRetryTagButton();
             }
             this.setUploadState('ready');
         };
@@ -480,6 +709,7 @@ const UI = {
 
         form.addEventListener('submit', async (e) => {
             e.preventDefault();
+            if (this._editMode) return; // Edit mode handles its own submission
             if (!State.tempUploadBase64) { showToast('Upload a photo first', 'error'); return; }
             try {
                 const item = {
@@ -528,12 +758,38 @@ const UI = {
         State.tempUploadMime = null;
     },
 
+    showRetryTagButton() {
+        const container = document.getElementById('detected-items-container');
+        const existing = container.querySelector('.btn-retry-tag');
+        if (existing) return;
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'btn btn-secondary btn-block btn-retry-tag';
+        btn.textContent = 'Retry AI Tagging';
+        btn.style.marginBottom = '10px';
+        btn.addEventListener('click', async () => {
+            if (!State.tempUploadBase64) return;
+            btn.disabled = true;
+            btn.textContent = 'Retrying...';
+            try {
+                const items = await Gemini.autoTagClothingItem(State.tempUploadBase64, State.tempUploadMime);
+                this.renderDetectedItems(items?.[0] || FALLBACK_ITEM);
+                showToast('AI tagging successful!', 'success');
+            } catch {
+                showToast('Retry failed. Fill details manually.', 'error');
+                btn.disabled = false;
+                btn.textContent = 'Retry AI Tagging';
+            }
+        });
+        container.insertBefore(btn, container.firstChild);
+    },
+
     renderDetectedItems(item) {
         const container = document.getElementById('detected-items-container');
         container.innerHTML = `
             <div class="form-group">
                 <label>Item Name</label>
-                <input type="text" class="detect-item-name" value="${item.name || ''}" placeholder="e.g. Navy Blue Jeans" required>
+                <input type="text" class="detect-item-name" value="${escapeHtml(item.name || '')}" placeholder="e.g. Navy Blue Jeans" required>
             </div>
             <div class="form-row">
                 <div class="form-group">
@@ -543,8 +799,8 @@ const UI = {
                 <div class="form-group">
                     <label>Color Swatch</label>
                     <div class="color-picker-wrapper">
-                        <input type="color" class="detect-item-color" value="${item.colorHex || '#3b82f6'}">
-                        <input type="text" class="detect-item-color-name" value="${item.colorName || ''}" placeholder="e.g. Tan Brown" required>
+                        <input type="color" class="detect-item-color" value="${escapeHtml(item.colorHex || '#3b82f6')}">
+                        <input type="text" class="detect-item-color-name" value="${escapeHtml(item.colorName || '')}" placeholder="e.g. Tan Brown" required>
                     </div>
                 </div>
             </div>
@@ -560,7 +816,7 @@ const UI = {
             </div>
             <div class="form-group">
                 <label>Notes (Optional)</label>
-                <input type="text" class="detect-item-notes" value="${item.notes || ''}" placeholder="e.g. Slim fit cotton">
+                <input type="text" class="detect-item-notes" value="${escapeHtml(item.notes || '')}" placeholder="e.g. Slim fit cotton">
             </div>`;
     },
 
@@ -568,10 +824,40 @@ const UI = {
         const input = document.getElementById('chat-input');
         const sendBtn = document.getElementById('btn-send-chat');
         input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${input.scrollHeight}px`; });
+        // Periodically update relative timestamps
+        setInterval(() => {
+            document.querySelectorAll('.message-time[data-timestamp]').forEach(el => {
+                const ts = el.getAttribute('data-timestamp');
+                if (ts) el.textContent = formatRelativeTime(new Date(ts));
+            });
+        }, 30000);
+        // Restore saved chat history into UI
+        if (State.chatHistory.length > 0) {
+            // Remove hardcoded welcome message since we have history
+            const welcomeMsg = document.querySelector('#chat-messages .message');
+            if (welcomeMsg) welcomeMsg.remove();
+            for (const msg of State.chatHistory) {
+                const sender = msg.role === 'user' ? 'user' : 'assistant';
+                const displayText = sender === 'assistant'
+                    ? msg.text.replace(/\[IDs:.*?\]/gi, '').trim()
+                    : msg.text;
+                const content = sender === 'assistant'
+                    ? displayText.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>')
+                    : escapeHtml(displayText);
+                const bubble = this.renderMessage(content, sender, msg.time || null);
+                // Re-generate outfit composites for assistant messages
+                if (sender === 'assistant' && /\[IDs:/i.test(msg.text)) {
+                    this.renderCompositesFromResponse(msg.text, bubble);
+                }
+            }
+        }
         const handleSend = async () => {
             const query = input.value.trim();
             if (!query) return;
+            sendBtn.disabled = true;
             this.renderMessage(query, 'user');
+            State.chatHistory.push({ role: 'user', text: query, time: new Date().toISOString() });
+            saveChatHistory();
             input.value = '';
             input.style.height = 'auto';
             input.focus();
@@ -583,45 +869,56 @@ const UI = {
                 typing.remove();
                 const html = response.replace(/\n/g, '<br>').replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>').replace(/\*(.*?)\*/g, '<em>$1</em>');
                 const bubble = this.renderMessage(html, 'assistant');
-                const idBlockRegex = /\[IDs:\s*(\d+(?:\s*,\s*\d+)*)\]/g;
-                const lookItemIds = [];
-                let m;
-                while ((m = idBlockRegex.exec(response)) !== null) lookItemIds.push(m[1].split(',').map(s => parseInt(s.trim())));
-                const idRegex = /(?:\[ID:\s*|ID:\s*|id:\s*)(\d+)/gi;
-                const matchedIds = new Set();
-                while ((m = idRegex.exec(response)) !== null) matchedIds.add(parseInt(m[1], 10));
-                const lower = response.toLowerCase();
-                const sets = [];
-                if (lookItemIds.length > 0) {
-                    for (const ids of lookItemIds) {
-                        const items = ids.map(id => State.wardrobe.find(w => w.id === id)).filter(Boolean);
-                        if (items.length > 0) sets.push(items);
-                    }
-                } else {
-                    const items = State.wardrobe.filter(item =>
-                        matchedIds.has(item.id) ||
-                        (item.name.length > 2 && lower.includes(item.name.toLowerCase()) && item.image)
-                    );
-                    const deduped = [];
-                    const seen = new Set();
-                    for (const i of items) { if (!seen.has(i.id)) { seen.add(i.id); deduped.push(i); } }
-                    if (deduped.length > 0) sets.push(deduped);
-                }
-                for (const look of sets) await this.generateLookComposite(look, bubble);
+                // Store raw response (with IDs) so composites can be re-generated on restore
+                State.chatHistory.push({ role: 'model', text: response, time: new Date().toISOString() });
+                saveChatHistory();
+                await this.renderCompositesFromResponse(response, bubble);
             } catch (err) {
                 typing.remove();
-                this.renderMessage(`⚠️ Error: ${err.message}`, 'assistant');
+                this.renderMessage(`Error: ${err.message}`, 'assistant');
+            } finally {
+                sendBtn.disabled = false;
             }
         };
         sendBtn.addEventListener('click', handleSend);
         input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } });
+        // Weather button
+        document.getElementById('btn-weather').addEventListener('click', async () => {
+            const weatherBtn = document.getElementById('btn-weather');
+            weatherBtn.disabled = true;
+            try {
+                const pos = await new Promise((res, rej) => navigator.geolocation.getCurrentPosition(res, rej, { timeout: 10000 }));
+                const { latitude, longitude } = pos.coords;
+                const resp = await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${latitude}&longitude=${longitude}&current=temperature_2m,weather_code,wind_speed_10m,relative_humidity_2m`);
+                const data = await resp.json();
+                const cur = data.current;
+                const codes = { 0: 'Clear sky', 1: 'Mainly clear', 2: 'Partly cloudy', 3: 'Overcast', 45: 'Foggy', 48: 'Icy fog', 51: 'Light drizzle', 53: 'Drizzle', 55: 'Heavy drizzle', 61: 'Light rain', 63: 'Rain', 65: 'Heavy rain', 71: 'Light snow', 73: 'Snow', 75: 'Heavy snow', 80: 'Light showers', 81: 'Showers', 82: 'Heavy showers', 95: 'Thunderstorm' };
+                const desc = codes[cur.weather_code] || 'Unknown';
+                const weatherText = `Current weather: ${cur.temperature_2m}°C, ${desc}, wind ${cur.wind_speed_10m} km/h, humidity ${cur.relative_humidity_2m}%. `;
+                input.value = weatherText + input.value;
+                input.focus();
+                showToast('Weather added!', 'success');
+            } catch (err) {
+                showToast('Could not get weather. Allow location access.', 'error');
+            }
+            weatherBtn.disabled = false;
+        });
+        // iOS keyboard fix: reposition input bar when virtual keyboard opens
+        if (window.visualViewport) {
+            const chatInputBar = document.querySelector('.chat-input-bar');
+            window.visualViewport.addEventListener('resize', () => {
+                const offset = window.innerHeight - window.visualViewport.height;
+                chatInputBar.style.transform = offset > 0 ? `translateY(-${offset}px)` : '';
+            });
+        }
     },
 
-    renderMessage(html, sender) {
+    renderMessage(html, sender, timestamp = null) {
         const feed = document.getElementById('chat-messages');
         const msg = document.createElement('div');
         msg.className = `message ${sender}`;
-        msg.innerHTML = `<div class="message-bubble">${html}</div><span class="message-time">Just now</span>`;
+        const time = timestamp ? formatRelativeTime(new Date(timestamp)) : 'Just now';
+        msg.innerHTML = `<div class="message-bubble">${html}</div><span class="message-time" data-timestamp="${timestamp || new Date().toISOString()}">${time}</span>`;
         feed.appendChild(msg);
         feed.scrollTop = feed.scrollHeight;
         return msg;
@@ -642,7 +939,7 @@ const UI = {
                 else results.forEach(r => {
                     const c = document.createElement('div');
                     c.className = 'gap-recommendation-card';
-                    c.innerHTML = `<span class="gap-card-priority ${r.priority}">${r.priority} Priority</span><div class="gap-card-category">${r.category}</div><div class="gap-card-title">${r.title}</div><div class="gap-card-reason">${r.reason}</div>`;
+                    c.innerHTML = `<span class="gap-card-priority ${escapeHtml(r.priority)}">${escapeHtml(r.priority)} Priority</span><div class="gap-card-category">${escapeHtml(r.category)}</div><div class="gap-card-title">${escapeHtml(r.title)}</div><div class="gap-card-reason">${escapeHtml(r.reason)}</div>`;
                     container.appendChild(c);
                 });
                 container.classList.remove('hidden');
@@ -673,7 +970,9 @@ const UI = {
             const a = document.createElement('a');
             a.href = URL.createObjectURL(blob);
             a.download = `DripChat_Backup_${new Date().toISOString().slice(0, 10)}.json`;
+            document.body.appendChild(a);
             a.click();
+            document.body.removeChild(a);
             URL.revokeObjectURL(a.href);
         });
         const importInput = document.getElementById('import-file-input');
@@ -685,37 +984,129 @@ const UI = {
                 const text = await file.text();
                 const data = JSON.parse(text);
                 if (!data.items?.length) throw new Error("Invalid backup JSON format.");
-                if (!confirm(`Importing backup will add ${data.items.length} clothes to your current device. Continue?`)) return;
+                if (!await showConfirm(`Importing backup will add ${data.items.length} clothes to your current device. Continue?`)) return;
+                let skipped = 0;
+                let duplicates = 0;
                 for (const item of data.items) {
-                    const clean = { image: item.image, name: item.name, category: item.category, colorHex: item.colorHex, colorName: item.colorName, style: item.style, season: item.season, notes: item.notes || '', createdAt: item.createdAt || new Date().toISOString() };
+                    if (!item.image || typeof item.image !== 'string' ||
+                        !item.name || typeof item.name !== 'string' ||
+                        !item.category || typeof item.category !== 'string') {
+                        skipped++;
+                        continue;
+                    }
+                    // Deduplication: check if item with same name + category + colorHex already exists
+                    const isDuplicate = State.wardrobe.some(w =>
+                        w.name === item.name && w.category === item.category && w.colorHex === (item.colorHex || '#3b82f6')
+                    );
+                    if (isDuplicate) { duplicates++; continue; }
+                    const clean = { image: item.image, name: item.name, category: item.category, colorHex: item.colorHex || '#3b82f6', colorName: item.colorName || '', style: item.style || 'casual', season: item.season || 'all', notes: item.notes || '', createdAt: item.createdAt || new Date().toISOString() };
                     clean.id = await DB.addItem(clean);
                     State.wardrobe.push(clean);
                 }
-                showToast('Backup imported!', 'success');
+                const msgs = [];
+                if (duplicates > 0) msgs.push(`${duplicates} duplicate${duplicates > 1 ? 's' : ''} skipped`);
+                if (skipped > 0) msgs.push(`${skipped} invalid skipped`);
+                showToast(msgs.length > 0 ? `Backup imported! (${msgs.join(', ')})` : 'Backup imported!', 'success');
                 importInput.value = '';
                 this.renderWardrobe();
                 this.renderStorageStats();
             } catch (err) { showToast('Import failed: ' + err.message, 'error'); }
         });
         document.getElementById('btn-reset-db').addEventListener('click', async () => {
-            if (!confirm("WARNING: This will permanently delete your entire wardrobe. Are you sure?")) return;
+            if (!await showConfirm("WARNING: This will permanently delete your entire wardrobe. Are you sure?")) return;
             await DB.clearAll();
             State.wardrobe = [];
             this.renderWardrobe();
             this.renderStorageStats();
             showToast('Database reset.', 'success');
         });
+        document.getElementById('btn-clear-chat').addEventListener('click', async () => {
+            if (!await showConfirm("Clear all chat history?")) return;
+            State.chatHistory = [];
+            localStorage.removeItem('dripchat_chat_history');
+            const feed = document.getElementById('chat-messages');
+            feed.querySelectorAll('.message').forEach((el, i) => { if (i > 0) el.remove(); });
+            showToast('Chat history cleared.', 'success');
+        });
     },
 
     updateConnectionStatus() {
         const dot = document.getElementById('connection-indicator');
-        if (State.apiKey) { dot.className = 'status-dot connected'; dot.title = 'Gemini API Key Configured'; }
-        else { dot.className = 'status-dot disconnected'; dot.title = 'Gemini API Key Required'; }
+        if (State.apiKey) {
+            dot.classList.add('hidden');
+        } else {
+            dot.classList.remove('hidden');
+            dot.className = 'status-dot disconnected';
+            dot.title = 'Gemini API Key Required';
+        }
     },
 
     renderStorageStats() {
-        document.getElementById('stat-item-count').innerText = `${State.wardrobe.length} items`;
+        const count = State.wardrobe.length;
+        document.getElementById('stat-item-count').innerText = `${count} items`;
         document.getElementById('stat-storage-size').innerText = `${calculateFormatSize(State.wardrobe)} MB`;
+        document.getElementById('stats-total').textContent = count;
+        // Category & style breakdown
+        const catCounts = {};
+        const styleCounts = {};
+        const colors = [];
+        for (const item of State.wardrobe) {
+            catCounts[item.category] = (catCounts[item.category] || 0) + 1;
+            styleCounts[item.style] = (styleCounts[item.style] || 0) + 1;
+            if (item.colorHex && !colors.includes(item.colorHex)) colors.push(item.colorHex);
+        }
+        document.getElementById('stats-categories').innerHTML = Object.entries(catCounts).map(([k, v]) => `<span class="stats-chip">${escapeHtml(CAT_LABELS[k] || k)}<strong>${v}</strong></span>`).join('');
+        document.getElementById('stats-styles').innerHTML = Object.entries(styleCounts).map(([k, v]) => `<span class="stats-chip">${escapeHtml(STYLE_LABELS[k] || k)}<strong>${v}</strong></span>`).join('');
+        document.getElementById('stats-colors').innerHTML = colors.slice(0, 20).map(c => `<div class="stats-color-dot" style="background:${escapeHtml(c)}" title="${escapeHtml(c)}"></div>`).join('');
+    },
+
+    renderSavedLooks() {
+        const grid = document.getElementById('saved-looks-grid');
+        const empty = document.getElementById('saved-looks-empty');
+        grid.querySelectorAll('.saved-look-card').forEach(el => el.remove());
+        if (State.savedLooks.length === 0) { empty.classList.remove('hidden'); return; }
+        empty.classList.add('hidden');
+        State.savedLooks.slice().reverse().forEach((look, idx) => {
+            const card = document.createElement('div');
+            card.className = 'saved-look-card';
+            card.innerHTML = `<img src="${look.image}" alt="Saved look"><div class="look-meta">${escapeHtml(look.items)}</div><button class="btn-remove-look" aria-label="Remove look">&times;</button>`;
+            card.querySelector('.btn-remove-look').addEventListener('click', () => {
+                const realIdx = State.savedLooks.length - 1 - idx;
+                State.savedLooks.splice(realIdx, 1);
+                try { localStorage.setItem('dripchat_saved_looks', JSON.stringify(State.savedLooks)); } catch {}
+                this.renderSavedLooks();
+                showToast('Look removed.', 'success');
+            });
+            grid.appendChild(card);
+        });
+    },
+
+    async renderCompositesFromResponse(response, bubbleEl) {
+        const idBlockRegex = /\[IDs:\s*(\d+(?:\s*,\s*\d+)*)\]/g;
+        const lookItemIds = [];
+        let m;
+        while ((m = idBlockRegex.exec(response)) !== null) lookItemIds.push(m[1].split(',').map(s => parseInt(s.trim())));
+        const idRegex = /(?:\[ID:\s*|ID:\s*|id:\s*)(\d+)/gi;
+        const matchedIds = new Set();
+        while ((m = idRegex.exec(response)) !== null) matchedIds.add(parseInt(m[1], 10));
+        const lower = response.toLowerCase();
+        const sets = [];
+        if (lookItemIds.length > 0) {
+            for (const ids of lookItemIds) {
+                const items = ids.map(id => State.wardrobe.find(w => w.id === id)).filter(Boolean);
+                if (items.length > 0) sets.push(items);
+            }
+        } else {
+            const items = State.wardrobe.filter(item =>
+                matchedIds.has(item.id) ||
+                (item.name.length > 2 && lower.includes(item.name.toLowerCase()) && item.image)
+            );
+            const deduped = [];
+            const seen = new Set();
+            for (const i of items) { if (!seen.has(i.id)) { seen.add(i.id); deduped.push(i); } }
+            if (deduped.length > 0) sets.push(deduped);
+        }
+        for (const look of sets) await this.generateLookComposite(look, bubbleEl);
     },
 
     async generateLookComposite(items, bubbleEl) {
@@ -737,13 +1128,11 @@ const UI = {
             ctx.fillStyle = '#0a0d14';
             ctx.fillRect(0, 0, W, H);
             const g = ctx.createRadialGradient(W / 2, H / 2, 0, W / 2, H / 2, H * 0.7);
-            g.addColorStop(0, 'rgba(99,102,241,0.12)'); g.addColorStop(0.5, 'rgba(168,85,247,0.06)'); g.addColorStop(1, 'transparent');
+            g.addColorStop(0, 'rgba(245,158,11,0.1)'); g.addColorStop(0.5, 'rgba(245,158,11,0.04)'); g.addColorStop(1, 'transparent');
             ctx.fillStyle = g;
             ctx.fillRect(0, 0, W, H);
-            ctx.fillStyle = 'rgba(255,255,255,0.025)';
-            for (let gx = 20; gx < W; gx += 24) for (let gy = HDR + 10; gy < H - FTR; gy += 24) { ctx.beginPath(); ctx.arc(gx, gy, 1, 0, Math.PI * 2); ctx.fill(); }
             const hg = ctx.createLinearGradient(0, 0, W, 0);
-            hg.addColorStop(0, '#6366f1'); hg.addColorStop(1, '#a855f7');
+            hg.addColorStop(0, '#f59e0b'); hg.addColorStop(1, '#d97706');
             ctx.fillStyle = hg;
             ctx.beginPath(); ctx.roundRect(0, 0, W, HDR, [0, 0, 0, 0]); ctx.fill();
             ctx.fillStyle = 'rgba(255,255,255,0.25)';
@@ -787,7 +1176,7 @@ const UI = {
                 const cw = ctx.measureText(cl).width + 14;
                 ctx.fillStyle = 'rgba(0,0,0,0.55)';
                 ctx.beginPath(); ctx.roundRect(30, y + 10, cw, 20, 10); ctx.fill();
-                ctx.fillStyle = '#c4b5fd';
+                ctx.fillStyle = '#fde68a';
                 ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
                 ctx.fillText(cl, 37, y + 20);
                 const ly = y + h;
@@ -819,15 +1208,57 @@ const UI = {
             ctx.fillText('Generated by DripChat \u00B7 Your AI Stylist', W / 2, H - FTR / 2);
             const bubble = bubbleEl.querySelector('.message-bubble');
             if (bubble) {
+                const lookDataUrl = c.toDataURL('image/png');
                 const imgEl = document.createElement('img');
-                imgEl.src = c.toDataURL('image/png');
+                imgEl.src = lookDataUrl;
                 imgEl.alt = 'Outfit look preview';
                 imgEl.style.cssText = 'max-width:100%;display:block;border-radius:14px;margin-top:14px';
                 bubble.appendChild(imgEl);
+                // Save Look button
+                const saveBtn = document.createElement('button');
+                saveBtn.className = 'btn btn-secondary btn-save-look';
+                saveBtn.textContent = 'Save Look';
+                saveBtn.style.cssText = 'margin-top:8px;padding:6px 12px;font-size:0.75rem;width:auto;display:inline-flex';
+                saveBtn.addEventListener('click', () => {
+                    State.savedLooks.push({ image: lookDataUrl, items: items.map(i => i.name).join(', '), savedAt: new Date().toISOString() });
+                    try { localStorage.setItem('dripchat_saved_looks', JSON.stringify(State.savedLooks.slice(-20))); } catch {}
+                    showToast('Look saved!', 'success');
+                    saveBtn.disabled = true;
+                    saveBtn.textContent = 'Saved';
+                });
+                bubble.appendChild(saveBtn);
             }
         } catch (e) {
             console.warn('Look composite generation failed:', e);
         }
+    },
+
+    setupSwipeNav() {
+        const viewOrder = ['view-wardrobe', 'view-chat', 'view-add', 'view-shop', 'view-settings'];
+        const main = document.getElementById('app-main');
+        let startX = 0, startY = 0, tracking = false;
+        main.addEventListener('touchstart', (e) => {
+            startX = e.touches[0].clientX;
+            startY = e.touches[0].clientY;
+            tracking = true;
+        }, { passive: true });
+        main.addEventListener('touchend', (e) => {
+            if (!tracking) return;
+            tracking = false;
+            const dx = e.changedTouches[0].clientX - startX;
+            const dy = e.changedTouches[0].clientY - startY;
+            // Only trigger if horizontal swipe is dominant and > 80px
+            if (Math.abs(dx) < 80 || Math.abs(dy) > Math.abs(dx) * 0.7) return;
+            const current = document.querySelector('.app-view.active');
+            if (!current) return;
+            const idx = viewOrder.indexOf(current.id);
+            if (idx === -1) return;
+            if (dx < 0 && idx < viewOrder.length - 1) {
+                this.switchView(viewOrder[idx + 1]);
+            } else if (dx > 0 && idx > 0) {
+                this.switchView(viewOrder[idx - 1]);
+            }
+        }, { passive: true });
     },
 
     setupRipple() {
@@ -852,6 +1283,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     State.cavemanMode = localStorage.getItem('dripchat_caveman') === 'true';
     const ct = document.getElementById('caveman-checkbox');
     if (ct) ct.checked = State.cavemanMode;
+    // Restore chat history from localStorage
+    try {
+        const savedChat = localStorage.getItem('dripchat_chat_history');
+        if (savedChat) State.chatHistory = JSON.parse(savedChat);
+    } catch { /* ignore corrupted history */ }
+    try {
+        const savedLooks = localStorage.getItem('dripchat_saved_looks');
+        if (savedLooks) State.savedLooks = JSON.parse(savedLooks);
+    } catch { /* ignore */ }
     try {
         await DB.init();
         State.wardrobe = await DB.getAllItems();
@@ -859,4 +1299,15 @@ window.addEventListener('DOMContentLoaded', async () => {
     TelegramIntegration.init();
     UI.init();
     UI.renderWardrobe();
+    UI.renderStorageStats();
+    // Hide loader and show app
+    const loader = document.getElementById('app-loader');
+    const container = document.getElementById('app-container');
+    container.classList.remove('app-hidden');
+    container.classList.add('app-visible');
+    if (loader) { loader.classList.add('fade-out'); setTimeout(() => loader.remove(), 300); }
+    // Register service worker for PWA
+    if ('serviceWorker' in navigator) {
+        navigator.serviceWorker.register('./sw.js').catch(() => {});
+    }
 });
